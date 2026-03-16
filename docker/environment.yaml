@@ -1,4 +1,4 @@
-name: tdmpc2
+name: evidential-trajopt
 channels:
   - pytorch-nightly
   - nvidia
