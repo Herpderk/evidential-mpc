@@ -13,9 +13,9 @@ dependencies:
   #- pytorch-cuda=12.4
   #- torchvision=0.15.2
   - pip:
-    - torch==2.8.0
-    - torchvision==0.23.0
-    - torchaudio==2.8.0
+    - torch==2.7.1
+    - torchvision==0.22.1
+    - torchaudio==2.7.1
     - dm-control==1.0.16
     - glfw==2.7.0
     - gymnasium==0.29.1
@@ -30,10 +30,8 @@ dependencies:
     - moviepy==1.0.3
     - mujoco==3.1.2
     - numpy==1.24.4
-    #- tensordict-nightly==2025.1.1
-    #- torchrl-nightly==2025.1.1
-    - tensordict==0.11.0
-    - torchrl==0.11.1
+    - tensordict-nightly==2025.1.1
+    - torchrl-nightly==2025.1.1
     - kornia==0.7.2
     - termcolor==2.4.0
     - tqdm==4.66.4

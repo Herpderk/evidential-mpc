@@ -2,8 +2,8 @@ defaults:
     - override hydra/launcher: submitit_local
 
 # environment
-task: dog-run
-obs: state
+task: cheetah-flip
+obs: rgb
 episodic: false
 
 # evaluation
@@ -12,7 +12,7 @@ eval_episodes: 10
 eval_freq: 50000
 
 # training
-steps: 10_000_000
+steps: 200_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -26,7 +26,7 @@ tau: 0.01
 discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
-buffer_size: 1_000_000
+buffer_size: 10_000
 exp_name: default
 data_dir: ???
 
@@ -64,14 +64,14 @@ dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: ???
+wandb_project: cheetah_flip
 wandb_entity: ???
 wandb_silent: false
 enable_wandb: true
 save_csv: true
 
 # misc
-compile: true
+compile: false
 save_video: true
 save_agent: true
 seed: 1
