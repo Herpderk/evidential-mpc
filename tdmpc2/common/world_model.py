@@ -1,11 +1,20 @@
 from copy import deepcopy
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from common import layers, math, init
 from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
+
+
+class NormalInverseGammaParams(NamedTuple):
+    gamma: torch.Tensor
+    nu: torch.Tensor
+    alpha: torch.Tensor
+    beta: torch.Tensor
 
 
 class WorldModel(nn.Module):
@@ -23,7 +32,12 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		self._dynamics = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg))
+		self._dynamics = layers.mlp(
+            in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+            mlp_dims=2*[cfg.mlp_dim],
+            out_dim=(4, cfg.latent_dim),    # Output normal inverse-gamma distribution params: (4, latent_dim)
+            act=layers.SimNorm(cfg),
+        )
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -111,14 +125,19 @@ class WorldModel(nn.Module):
 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
 		return self._encoder[self.cfg.obs](obs)
 
-	def next(self, z, a, task):
+	def next(self, z, a, task) -> NormalInverseGammaParams:
 		"""
 		Predicts the next latent state given the current latent state and action.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		return self._dynamics(z)
+		distribution_params = self._dynamics(z)
+		prediction = distribution_params[0]
+		uncertainty = F.softplus(distribution_params[1:,:])
+		nu, alpha, beta = torch.unbind(uncertainty, dim=0)
+		alpha += 1
+		return NormalInverseGammaParams(prediction, nu, alpha, beta)
 
 	def reward(self, z, a, task):
 		"""
@@ -128,7 +147,7 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
 		return self._reward(z)
-	
+
 	def termination(self, z, task, unnormalized=False):
 		"""
 		Predicts termination signal.
@@ -139,7 +158,7 @@ class WorldModel(nn.Module):
 		if unnormalized:
 			return self._termination(z)
 		return torch.sigmoid(self._termination(z))
-		
+
 
 	def pi(self, z, task):
 		"""

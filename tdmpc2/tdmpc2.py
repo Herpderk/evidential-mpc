@@ -1,3 +1,5 @@
+from math import pi as PI
+
 import torch
 import torch.nn.functional as F
 
@@ -5,6 +7,7 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
+from common.evidential import aleatoric_uncertainty
 from tensordict import TensorDict
 
 
@@ -127,7 +130,8 @@ class TDMPC2(torch.nn.Module):
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			z = self.model.next(z, actions[t], task)
+			evidential_pred = self.model.next(z, actions[t], task)
+			z = evidential_pred.gamma
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -157,7 +161,8 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z = self.model.next(_z, pi_actions[t], task)
+				evidential_pred = self.model.next(_z, pi_actions[t], task)
+				_z = evidential_pred.gamma
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -272,9 +277,20 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			z = self.model.next(z, _action, task)
-			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
-			zs[t+1] = z
+			gamma, nu, alpha, beta = self.model.next(z, _action, task)
+
+			# Replace the nominal MSE loss with the evidential regression loss
+			omega = 2*beta*(1 + nu)
+			nll_loss = 0.5*torch.log(PI/nu) - alpha*torch.log(omega) \
+       					+ (alpha+0.5)*torch.log(F.mse_loss(gamma, _next_z)*nu + omega) \
+						+ torch.lgamma(alpha) - torch.lgamma(alpha+0.5)
+			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
+			reg_loss = torch.abs((_next_z - gamma) / aleatoric) * (2*nu + alpha)
+			LAMBDA = 1.0
+
+			#consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+			consistency_loss += (nll_loss + LAMBDA*reg_loss) * self.cfg.rho**t
+			zs[t+1] = gamma
 
 		# Predictions
 		_zs = zs[:-1]
