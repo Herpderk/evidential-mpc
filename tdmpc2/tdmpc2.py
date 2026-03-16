@@ -279,17 +279,23 @@ class TDMPC2(torch.nn.Module):
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 			gamma, nu, alpha, beta = self.model.next(z, _action, task)
 
-			# Replace the nominal MSE loss with the evidential regression loss
-			omega = 2*beta*(1 + nu)
-			nll_loss = 0.5*torch.log(PI/nu) - alpha*torch.log(omega) \
-       					+ (alpha+0.5)*torch.log(F.mse_loss(gamma, _next_z)*nu + omega) \
-						+ torch.lgamma(alpha) - torch.lgamma(alpha+0.5)
+			# Element-wise squared error
+			squared_error = (gamma - _next_z) ** 2
+
+			# Evidential NLL
+			omega = 2 * beta * (1 + nu)
+			nll_loss = 0.5 * torch.log(PI / nu) - alpha * torch.log(omega) \
+						+ (alpha + 0.5) * torch.log(squared_error * nu + omega) \
+						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
+
+			# Evidential egularization
 			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			reg_loss = torch.abs((_next_z - gamma) / aleatoric) * (2*nu + alpha)
+			reg_loss = torch.abs((_next_z - gamma) / aleatoric) * (2 * nu + alpha)
 			LAMBDA = 1.0
 
-			#consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
-			consistency_loss += (nll_loss + LAMBDA*reg_loss) * self.cfg.rho**t
+			# Aggregate batched losses
+			loss_change = (nll_loss + LAMBDA * reg_loss).mean()
+			consistency_loss += loss_change * self.cfg.rho**t
 			zs[t+1] = gamma
 
 		# Predictions
