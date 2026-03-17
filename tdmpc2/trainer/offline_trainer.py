@@ -18,7 +18,7 @@ class OfflineTrainer(Trainer):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 		self._start_time = time()
-	
+
 	def eval(self):
 		"""Evaluate a TD-MPC2 agent."""
 		results = dict()
@@ -38,7 +38,7 @@ class OfflineTrainer(Trainer):
 				f'episode_reward+{self.cfg.tasks[task_idx]}': np.nanmean(ep_rewards),
 				f'episode_success+{self.cfg.tasks[task_idx]}': np.nanmean(ep_successes),})
 		return results
-	
+
 	def _load_dataset(self):
 		"""Load dataset for offline training."""
 		fp = Path(os.path.join(self.cfg.data_dir, '*.pt'))
@@ -47,7 +47,7 @@ class OfflineTrainer(Trainer):
 		print(f'Found {len(fps)} files in {fp}')
 		if len(fps) < (20 if self.cfg.task == 'mt80' else 4):
 			print(f'WARNING: expected 20 files for mt80 task set, 4 files for mt30 task set, found {len(fps)} files.')
-	
+
 		# Create buffer for sampling
 		_cfg = deepcopy(self.cfg)
 		_cfg.episode_length = 101 if self.cfg.task == 'mt80' else 501
@@ -69,12 +69,14 @@ class OfflineTrainer(Trainer):
 		assert self.cfg.multitask and self.cfg.task in {'mt30', 'mt80'}, \
 			'Offline training only supports multitask training with mt30 or mt80 task sets.'
 		self._load_dataset()
-		
+
 		print(f'Training agent for {self.cfg.steps} iterations...')
+
 		metrics = {}
 		for i in range(self.cfg.steps):
 
 			# Update agent
+			self.agent.step += 1
 			train_metrics = self.agent.update(self.buffer)
 
 			# Evaluate agent periodically
@@ -90,5 +92,5 @@ class OfflineTrainer(Trainer):
 					if i > 0:
 						self.logger.save_agent(self.agent, identifier=f'{i}')
 				self.logger.log(metrics, 'pretrain')
-			
+
 		self.logger.finish(self.agent)

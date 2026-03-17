@@ -45,6 +45,7 @@ class TDMPC2(torch.nn.Module):
 		if cfg.compile:
 			print('Compiling update function with torch.compile...')
 			self._update = torch.compile(self._update, mode="reduce-overhead")
+		self.step = 0
 
 	@property
 	def plan(self):
@@ -291,10 +292,12 @@ class TDMPC2(torch.nn.Module):
 			# Evidential egularization
 			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
 			reg_loss = torch.abs((_next_z - gamma) / aleatoric) * (2 * nu + alpha)
-			LAMBDA = 1.0
+			LAM_MAX = 1e-2
+			LAM_MAX_RATIO = 0.5
+			lam = LAM_MAX * min(1, self.step / (self.cfg.steps * LAM_MAX_RATIO))
 
 			# Aggregate batched losses
-			loss_change = (nll_loss + LAMBDA * reg_loss).mean()
+			loss_change = (nll_loss + lam * reg_loss).mean()
 			consistency_loss += loss_change * self.cfg.rho**t
 			zs[t+1] = gamma
 
