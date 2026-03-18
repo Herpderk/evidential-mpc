@@ -1,4 +1,4 @@
-from math import pi as PI
+from math import pi as PI, exp
 
 import torch
 import torch.nn.functional as F
@@ -289,16 +289,16 @@ class TDMPC2(torch.nn.Module):
 						+ (alpha + 0.5) * torch.log(squared_error * nu + omega) \
 						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
 
-			# Evidential egularization
+			# Evidential regularization
+			LAM_MAX = 1e-6
+			LAM_MIN = 1e-8
+			midpoint = self.cfg.steps // 2
+			steepness = 1e-5             # Controls how fast the drop is
+			decay = 1 / (1 + exp(steepness * (self.step - midpoint)))	# Sigmoid Decay Formula
+			lam = LAM_MIN + (LAM_MAX - LAM_MIN) * decay
+
 			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			reg_loss = torch.abs((_next_z - gamma) / aleatoric) * (2 * nu + alpha)
-			LAM_MAX = 1e-4
-			LAM_START = 0.1 * self.cfg.steps
-			LAM_RAMP_RATIO = 0.5
-			if self.step <= LAM_START:
-				lam = 0
-			else:
-				lam = LAM_MAX * min(1, (self.step - LAM_START)  / (self.cfg.steps * LAM_RAMP_RATIO))
+			reg_loss = torch.abs((_next_z - gamma) / aleatoric)**2 * (2 * nu + alpha)
 
 			# Aggregate batched losses
 			loss_change = (nll_loss + lam * reg_loss).mean()
