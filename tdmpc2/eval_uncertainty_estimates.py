@@ -125,7 +125,7 @@ def evaluate_world_model_line(cfg: dict):
     formatter.set_scientific(False)
 
     # 1x2 grid of 2D plots
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(12, 10))
 
     # Plot Aleatoric Line
     ax0.plot(angles_np, aleatoric_mean, color='tab:blue', linewidth=3, marker='', markersize=4)
