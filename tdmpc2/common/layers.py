@@ -120,16 +120,15 @@ class NormedLinear(nn.Linear):
 
 
 class ConditionalCouplingConditioner(nn.Module):
-    def __init__(self, feature_dim, context_dim, hidden_dim):
+    def __init__(self, feature_dim, context_dim, hidden_dim, act=None):
         super().__init__()
-        input_dim = (feature_dim // 2) + context_dim
-        output_dim = feature_dim
+        in_dim = (feature_dim // 2) + context_dim
+        out_dim = feature_dim
+        if act is None: act = nn.SiLU()
         self.mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
+            NormedLinear(in_dim, hidden_dim, act=act),
+            NormedLinear(hidden_dim, hidden_dim, act=act),
+            nn.Linear(hidden_dim, out_dim) # MUST REMAIN PURE LINEAR
         )
         # Crucial for normalizing flows: initialize last layer with zeros
         # This ensures the flow starts as an identity transformation
@@ -152,6 +151,7 @@ class ConditionalAffineCoupling(nf.flows.Flow):
 		# 2. Get scale and shift from param network (Pass context here!)
 		scale_shift = self.conditioner(z1, context=context)
 		scale, shift = scale_shift.chunk(2, dim=-1)
+		scale = torch.tanh(scale)
 
 		# 3. Transform z2
 		z2 = z2 * torch.exp(scale) + shift
@@ -168,6 +168,7 @@ class ConditionalAffineCoupling(nf.flows.Flow):
 		# 2. Get scale and shift (MUST use z1, which is unchanged)
 		scale_shift = self.conditioner(z1, context=context)
 		scale, shift = scale_shift.chunk(2, dim=-1)
+		scale = torch.tanh(scale)
 
 		# 3. Inverse transform z2
 		z2 = (z2 - shift) * torch.exp(-scale)
