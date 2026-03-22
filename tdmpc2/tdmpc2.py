@@ -274,15 +274,42 @@ class TDMPC2(torch.nn.Module):
 		z = self.model.encode(obs[0], task)
 		zs[0] = z
 		consistency_loss = 0
+		flow_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 			z = self.model.next(z, _action, task)
-			consstency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
+			flow_loss += self.model.flow_loss(zs[t+1], zs[t], _action, task)
 
-		# Compute flow (density estimator) loss by treating each time step as parallel batch
-		z_prev = zs[:-1].reshape(-1, self.cfg.latent_dim)
-		z_next = zs[1:].reshape(-1, self.cfg.latent_dim)
-		flow_loss = self.model.flow_loss(z_next, z_prev, action, task, subbatch_size=1024)
+		""" # Compute flow (density estimator) loss by treating each time step as parallel batch
+		znext_batch = zs[1:].reshape(-1, self.cfg.latent_dim)
+		zprev_batch = zs[:-1].reshape(-1, self.cfg.latent_dim)
+		a_batch = action.reshape(-1, self.cfg.action_dim)
+
+        # Get shuffled sub-chunks
+		perm_idx = torch.randperm(znext_batch.shape[0], device=znext_batch.device)
+		znext_splits = znext_batch[perm_idx].split(self.cfg.batch)
+		zprev_shuffled = zprev_batch[perm_idx]
+		a_shuffled = a_batch[perm_idx]
+
+		# 2. Split into chunks of `subbatch_size`
+		context_splits = context_shuffled.split(subbatch_size)
+		feature_splits = feature_shuffled.split(subbatch_size)
+
+		total_loss = 0.0
+		num_splits = len(context_splits)
+
+		# 3. Iterate through and compute loss
+		for ctx_sub, feat_sub in zip(context_splits, feature_splits):
+
+			loss = self._flow.forward_kld(feat_sub.detach(), ctx_sub.detach())
+
+			# --- WARNING: MEMORY TRAP ---
+			# If you do `total_loss += loss` here, PyTorch stores ALL graphs in VRAM.
+			# See the solutions below!
+
+			total_loss += loss
+		flow_loss = self.model.flow_loss(z_next, z_prev, action, task, subbatch_size=1024) """
 
 		# Predictions
 		_zs = zs[:-1]

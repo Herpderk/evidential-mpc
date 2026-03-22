@@ -34,7 +34,7 @@ class WorldModel(nn.Module):
 		self._flow = layers.maf(
 			feature_dim=cfg.latent_dim,
 			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-			hidden_dim=128,
+			hidden_dim=32,
 			num_layers=4,
 			num_blocks=2,
 		)
@@ -68,8 +68,8 @@ class WorldModel(nn.Module):
 
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
-		modules = ['Encoder', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		modules = ['Encoder', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions', 'Density Estimator']
+		for i, m in enumerate([self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs, self._flow]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -134,21 +134,11 @@ class WorldModel(nn.Module):
 		z = torch.cat([z, a], dim=-1)
 		return self._dynamics(z)
 
-	def flow_loss(self, z_next, z_prev, a, task, subbatch_size=1024):
-		# Compute flow (density estimator) loss
-  		# Treat each time step as a batch dimension (flatten batch and time together)
-		context_batch = z_prev
+	def flow_loss(self, z_next, z_prev, a, task):
 		if self.cfg.multitask:
-			task_batch = task.unsqueeze(0).expand(context_batch.shape[0], -1)
-			context_batch = self.task_emb(context_batch, task_batch)
-		action_batch = a.reshape(-1, self.cfg.action_dim)
-		context_batch = torch.cat([context_batch, action_batch], dim=-1)
-
-		# Randomly sample sub-batch due to memory limits
-		subbatch_idx = torch.randperm(context_batch.shape[0], device=z_next.device)[:subbatch_size]
-		context_subbatch = context_batch[subbatch_idx]
-		feature_subbatch = z_next[subbatch_idx]
-		return self._flow.forward_kld(feature_subbatch.detach(), context_subbatch.detach())
+			z_prev = self.task_emb(z_prev, task)
+		z_prev = torch.cat([z_prev, a], dim=-1)
+		return self._flow.forward_kld(z_next.detach(), z_prev.detach())
 
 	def ood_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
