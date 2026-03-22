@@ -5,7 +5,6 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
 
-from common.evidential import aleatoric_uncertainty, epistemic_uncertainty
 from common.parser import parse_cfg
 from envs import make_env
 from tdmpc2 import TDMPC2
@@ -21,7 +20,7 @@ RESOLUTION = 50
 
 @hydra.main(config_name='config', config_path='.')
 def evaluate_world_model_line(cfg: dict):
-    """Loads the TD-MPC2 agent and evaluates uncertainty across pitch angles."""
+    """Loads the TD-MPC2 agent and evaluates OOD logprob across pitch angles."""
     cfg = parse_cfg(cfg)
 
     env = make_env(cfg)
@@ -84,38 +83,18 @@ def evaluate_world_model_line(cfg: dict):
     print(f"Evaluating {num_states} states through the world model...")
 
     with torch.no_grad():
+        # Encode observations into latents
         z = agent.model.encode(obs_batch, task=None)
-        next_z, nu, alpha, beta = agent.model.next(z, action_batch, task=None)
 
-        # Reward and Value
-        reward_preds = agent.model.reward(z, action_batch, task=None)
-        q_values = agent.model.Q(z, action_batch, task=None)
+        # Predict the next latent state (we only need the first output, next_z)
+        z_next = agent.model.next(z, action_batch, task=None)
 
-        if q_values.dim() == 3:
-            value_preds = torch.min(q_values, dim=0)[0]
-        else:
-            value_preds = q_values
+        # Compute the Out-Of-Distribution Log Probability
+        logprobs = agent.model.ood_logprob(z_next, z, action_batch, task=None)
 
-        reward_scalars = reward_preds.argmax(dim=-1).float().cpu().numpy()
-        value_scalars = value_preds.argmax(dim=-1).float().cpu().numpy()
-
-        # Calculate Mean of uncertainties across latent dims
-        aleatoric_vec = aleatoric_uncertainty(nu, alpha, beta)
-        epistemic_vec = epistemic_uncertainty(nu)
-
-        aleatoric_mean = torch.mean(aleatoric_vec, dim=-1).cpu().numpy()
-
-        # Extract raw evidence for the "Zoomed" relative grid
-        raw_evidence = nu.detach().cpu().numpy()
-        evidence_scalar = np.mean(raw_evidence, axis=-1)
-
-        # Baseline subtraction for saturated epistemic signal
-        zoomed_line = (evidence_scalar - np.min(evidence_scalar))
-        if np.max(zoomed_line) < 1e-3:
-            zoomed_line = zoomed_line * 1e5
-
-        epistemic_line = zoomed_line
-        epistemic_line = torch.mean(epistemic_vec, dim=-1).cpu().numpy()
+        # Move to CPU and numpy for plotting
+        # (Assuming logprob returns a scalar per state in the batch)
+        logprobs_np = logprobs.squeeze().cpu().numpy()
 
     print("Evaluation complete.")
 
@@ -124,29 +103,20 @@ def evaluate_world_model_line(cfg: dict):
     formatter = ScalarFormatter(useOffset=False)
     formatter.set_scientific(False)
 
-    # 1x2 grid of 2D plots
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(12, 10))
+    # Single plot for the OOD Logprob
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Plot Aleatoric Line
-    ax0.plot(angles_np, aleatoric_mean, color='tab:blue', linewidth=3, marker='', markersize=4)
-    ax0.set_title(f'Aleatoric Uncertainty vs. Pitch (Height={CONSTANT_HEIGHT})')
-    ax0.set_xlabel('Pitch Angle (rad)')
-    ax0.set_ylabel('Uncertainty Magnitude')
-    ax0.yaxis.set_major_formatter(formatter)
-    ax0.grid(True, linestyle='--', alpha=0.7)
-
-    # Plot Epistemic Line
-    ax1.plot(angles_np, epistemic_line, color='tab:orange', linewidth=3, marker='', markersize=4)
-    ax1.set_title('Epistemic Uncertainty vs. Pitch')
-    ax1.set_xlabel('Pitch Angle (rad)')
-    ax1.set_ylabel('Uncertainty Magnitude')
-    ax1.yaxis.set_major_formatter(formatter)
-    ax1.grid(True, linestyle='--', alpha=0.7)
+    ax.plot(angles_np, logprobs_np, color='tab:red', linewidth=3, marker='o', markersize=4)
+    ax.set_title(f'OOD Log-Probability vs. Pitch (Height={CONSTANT_HEIGHT})')
+    ax.set_xlabel('Pitch Angle (rad)')
+    ax.set_ylabel('Log-Probability')
+    ax.yaxis.set_major_formatter(formatter)
+    ax.grid(True, linestyle='--', alpha=0.7)
 
     plt.tight_layout()
     plt.show()
 
-    return angles_np, reward_scalars, value_scalars, next_z
+    return angles_np, logprobs_np, next_z
 
 if __name__ == "__main__":
     evaluate_world_model_line()
