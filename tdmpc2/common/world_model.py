@@ -31,12 +31,11 @@ class WorldModel(nn.Module):
             out_dim=cfg.latent_dim,
             act=layers.SimNorm(cfg),
         )
-		self._flow = layers.maf(
+		self._flow = layers.acf(
 			feature_dim=cfg.latent_dim,
 			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-			hidden_dim=32,
+			hidden_dim=cfg.latent_dim//2,
 			num_layers=4,
-			num_blocks=2,
 		)
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
@@ -138,17 +137,14 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z_prev = self.task_emb(z_prev, task)
 		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._flow.forward_kld(z_next.detach(), z_prev.detach())
+		return self._flow.forward_kld(z_next, context=z_prev)
 
 	def ood_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:
 				z_prev = self.task_emb(z_prev, task)
-			context = torch.cat([z_prev, a], dim=-1)
-			return self._flow.log_prob(
-				inputs=z_next,
-				context=context,
-			)
+			z_prev = torch.cat([z_prev, a], dim=-1)
+			return self._flow.log_prob(z_next, context=z_prev)
 
 	def reward(self, z, a, task):
 		"""

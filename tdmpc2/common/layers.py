@@ -119,6 +119,96 @@ class NormedLinear(nn.Linear):
 			f"act={self.act.__class__.__name__})"
 
 
+class ConditionalCouplingConditioner(nn.Module):
+    def __init__(self, feature_dim, context_dim, hidden_dim):
+        super().__init__()
+        input_dim = (feature_dim // 2) + context_dim
+        output_dim = feature_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+        # Crucial for normalizing flows: initialize last layer with zeros
+        # This ensures the flow starts as an identity transformation
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, half_feature, context=None):
+        return self.mlp(torch.cat([half_feature, context], dim=-1))
+
+
+class ConditionalAffineCoupling(nf.flows.Flow):
+	def __init__(self, feature_dim, context_dim, hidden_dim):
+		super().__init__()
+		self.conditioner = ConditionalCouplingConditioner(feature_dim, context_dim, hidden_dim)
+
+	def forward(self, z, context=None):
+		# 1. Split latent in half
+		z1, z2 = z.chunk(2, dim=-1)
+
+		# 2. Get scale and shift from param network (Pass context here!)
+		scale_shift = self.conditioner(z1, context=context)
+		scale, shift = scale_shift.chunk(2, dim=-1)
+
+		# 3. Transform z2
+		z2 = z2 * torch.exp(scale) + shift
+		z_out = torch.cat([z1, z2], dim=-1)
+
+		# 4. Log determinant is just the sum of the scale
+		log_det = torch.sum(scale, dim=-1)
+		return z_out, log_det
+
+	def inverse(self, z, context=None):
+		# 1. Split latent in half
+		z1, z2 = z.chunk(2, dim=-1)
+
+		# 2. Get scale and shift (MUST use z1, which is unchanged)
+		scale_shift = self.conditioner(z1, context=context)
+		scale, shift = scale_shift.chunk(2, dim=-1)
+
+		# 3. Inverse transform z2
+		z2 = (z2 - shift) * torch.exp(-scale)
+		z_out = torch.cat([z1, z2], dim=-1)
+
+		# 4. Inverse log determinant
+		log_det = -torch.sum(scale, dim=-1)
+		return z_out, log_det
+
+
+class ConditionalReverse(nf.flows.Flow):
+    def forward(self, z, context=None):
+        # Zero log-det because swapping doesn't change volume
+        log_det = torch.zeros(*z.shape[:-1], device=z.device)
+        return z.flip(dims=[-1]), log_det
+
+    def inverse(self, z, context=None):
+        log_det = torch.zeros(*z.shape[:-1], device=z.device)
+        return z.flip(dims=[-1]), log_det
+
+
+def acf(feature_dim, context_dim, hidden_dim, num_layers):
+	flows = []
+	for i in range(num_layers):
+		flows += [ConditionalAffineCoupling(feature_dim, context_dim, hidden_dim)]
+		flows += [ConditionalReverse()]
+	q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
+	return nf.ConditionalNormalizingFlow(q0=q0, flows=flows)
+
+
+def maf(feature_dim, context_dim, hidden_dim, num_layers, num_blocks=2):
+    flows = []
+    for i in range(num_layers):
+        flows += [nf.flows.MaskedAffineAutoregressive(feature_dim, hidden_dim,
+                                                    context_features=context_dim,
+                                                    num_blocks=num_blocks)]
+        flows += [nf.flows.LULinearPermute(feature_dim)]
+    q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
+    return nf.ConditionalNormalizingFlow(q0, flows)
+
+
 def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	"""
 	Basic building block of TD-MPC2.
@@ -132,19 +222,6 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
 	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1]))
 	return nn.Sequential(*mlp)
-
-
-def maf(feature_dim, context_dim, hidden_dim, num_layers=4, num_blocks=2):
-    flows = []
-    for i in range(num_layers):
-        flows += [nf.flows.MaskedAffineAutoregressive(feature_dim, hidden_dim,
-                                                    context_features=context_dim,
-                                                    num_blocks=num_blocks)]
-        flows += [nf.flows.LULinearPermute(feature_dim)]
-
-    # Set base distribution
-    q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
-    return nf.ConditionalNormalizingFlow(q0, flows)
 
 
 def conv(in_shape, num_channels, act=None):
