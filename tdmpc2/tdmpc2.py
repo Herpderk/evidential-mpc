@@ -7,7 +7,6 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
-from common.evidential import aleatoric_uncertainty
 from tensordict import TensorDict
 
 
@@ -131,8 +130,7 @@ class TDMPC2(torch.nn.Module):
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			evidential_pred = self.model.next(z, actions[t], task)
-			z = evidential_pred.gamma
+			z = self.model.next(z, actions[t], task)
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -162,8 +160,7 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				evidential_pred = self.model.next(_z, pi_actions[t], task)
-				_z = evidential_pred.gamma
+				_z = self.model.next(_z, pi_actions[t], task)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -278,32 +275,14 @@ class TDMPC2(torch.nn.Module):
 		zs[0] = z
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			gamma, nu, alpha, beta = self.model.next(z, _action, task)
+			z = self.model.next(z, _action, task)
+			consstency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+			zs[t+1] = z
 
-			# Element-wise squared error
-			squared_error = (gamma - _next_z) ** 2
-
-			# Evidential NLL
-			omega = 2 * beta * (1 + nu)
-			nll_loss = 0.5 * torch.log(PI / nu) - alpha * torch.log(omega) \
-						+ (alpha + 0.5) * torch.log(squared_error * nu + omega) \
-						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
-
-			# Evidential regularization
-			LAM_MAX = 1e-6
-			LAM_MIN = 1e-8
-			midpoint = self.cfg.steps // 2
-			steepness = 1e-5             # Controls how fast the drop is
-			decay = 1 / (1 + exp(steepness * (self.step - midpoint)))	# Sigmoid Decay Formula
-			lam = LAM_MIN + (LAM_MAX - LAM_MIN) * decay
-
-			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			reg_loss = torch.abs((_next_z - gamma) / aleatoric)**2 * (2 * nu + alpha)
-
-			# Aggregate batched losses
-			loss_change = (nll_loss + lam * reg_loss).mean()
-			consistency_loss += loss_change * self.cfg.rho**t
-			zs[t+1] = gamma
+		# Compute flow (density estimator) loss by treating each time step as parallel batch
+		z_prev = zs[:-1].reshape(-1, self.cfg.latent_dim)
+		z_next = zs[1:].reshape(-1, self.cfg.latent_dim)
+		flow_loss = self.model.flow_loss(z_next, z_prev, action, task, subbatch_size=1024)
 
 		# Predictions
 		_zs = zs[:-1]
@@ -330,7 +309,8 @@ class TDMPC2(torch.nn.Module):
 			self.cfg.consistency_coef * consistency_loss +
 			self.cfg.reward_coef * reward_loss +
 			self.cfg.termination_coef * termination_loss +
-			self.cfg.value_coef * value_loss
+			self.cfg.value_coef * value_loss +
+			flow_loss
 		)
 
 		# Update model

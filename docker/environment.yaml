@@ -39,6 +39,7 @@ dependencies:
     - wandb==0.25.1
     - setuptools==80.10.2
     - matplotlib
+    - normflows
     ####################
     # Gym:
     # (unmaintained but required for maniskill2/meta-world)

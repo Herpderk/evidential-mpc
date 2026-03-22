@@ -10,13 +10,6 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
 
-class NormalInverseGammaParams(NamedTuple):
-    gamma: torch.Tensor
-    nu: torch.Tensor
-    alpha: torch.Tensor
-    beta: torch.Tensor
-
-
 class WorldModel(nn.Module):
 	"""
 	TD-MPC2 implicit world model architecture.
@@ -35,9 +28,16 @@ class WorldModel(nn.Module):
 		self._dynamics = layers.mlp(
             in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
             mlp_dims=2*[cfg.mlp_dim],
-            out_dim=4*cfg.latent_dim,    # Output normal inverse-gamma distribution params: (4, latent_dim)
+            out_dim=cfg.latent_dim,
             act=layers.SimNorm(cfg),
         )
+		self._flow = layers.maf(
+			feature_dim=cfg.latent_dim,
+			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+			hidden_dim=128,
+			num_layers=4,
+			num_blocks=2,
+		)
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -125,20 +125,40 @@ class WorldModel(nn.Module):
 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
 		return self._encoder[self.cfg.obs](obs)
 
-	def next(self, z, a, task) -> NormalInverseGammaParams:
+	def next(self, z, a, task):
 		"""
 		Predicts the next latent state given the current latent state and action.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		distribution_params = self._dynamics(z)
+		return self._dynamics(z)
 
-		gamma, nu_raw, alpha_raw, beta_raw = distribution_params.chunk(4, dim=-1)
-		nu = F.softplus(nu_raw)
-		alpha = 1 + F.softplus(alpha_raw)
-		beta = F.softplus(beta_raw)
-		return NormalInverseGammaParams(gamma, nu, alpha, beta)
+	def flow_loss(self, z_next, z_prev, a, task, subbatch_size=1024):
+		# Compute flow (density estimator) loss
+  		# Treat each time step as a batch dimension (flatten batch and time together)
+		context_batch = z_prev
+		if self.cfg.multitask:
+			task_batch = task.unsqueeze(0).expand(context_batch.shape[0], -1)
+			context_batch = self.task_emb(context_batch, task_batch)
+		action_batch = a.reshape(-1, self.cfg.action_dim)
+		context_batch = torch.cat([context_batch, action_batch], dim=-1)
+
+		# Randomly sample sub-batch due to memory limits
+		subbatch_idx = torch.randperm(context_batch.shape[0], device=z_next.device)[:subbatch_size]
+		context_subbatch = context_batch[subbatch_idx]
+		feature_subbatch = z_next[subbatch_idx]
+		return self._flow.forward_kld(feature_subbatch.detach(), context_subbatch.detach())
+
+	def ood_logprob(self, z_next, z_prev, a, task):
+		with torch.no_grad():
+			if self.cfg.multitask:
+				z_prev = self.task_emb(z_prev, task)
+			context = torch.cat([z_prev, a], dim=-1)
+			return self._flow.log_prob(
+				inputs=z_next,
+				context=context,
+			)
 
 	def reward(self, z, a, task):
 		"""

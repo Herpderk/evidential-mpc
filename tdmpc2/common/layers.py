@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tensordict import from_modules
 from copy import deepcopy
+import normflows as nf
 
 
 class Ensemble(nn.Module):
@@ -131,6 +132,19 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
 	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1]))
 	return nn.Sequential(*mlp)
+
+
+def maf(feature_dim, context_dim, hidden_dim, num_layers=4, num_blocks=2):
+    flows = []
+    for i in range(num_layers):
+        flows += [nf.flows.MaskedAffineAutoregressive(feature_dim, hidden_dim,
+                                                    context_features=context_dim,
+                                                    num_blocks=num_blocks)]
+        flows += [nf.flows.LULinearPermute(feature_dim)]
+
+    # Set base distribution
+    q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
+    return nf.ConditionalNormalizingFlow(q0, flows)
 
 
 def conv(in_shape, num_channels, act=None):
