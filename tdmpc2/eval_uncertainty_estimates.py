@@ -89,12 +89,16 @@ def evaluate_world_model_line(cfg: dict):
         # Predict the next latent state (we only need the first output, next_z)
         z_next = agent.model.next(z, action_batch, task=None)
 
-        # Compute the Out-Of-Distribution Log Probability
-        logprobs = agent.model.ood_logprob(z_next, z, action_batch, task=None)
+        # Compute the in-distribution log-prob
+        logprobs = agent.model.id_logprob(z_next, z, action_batch, task=None)
+
+        # Compute the in-distribution bits per dims
+        bpds = agent.model.id_bpd(z_next, z, action_batch, task=None)
 
         # Move to CPU and numpy for plotting
         # (Assuming logprob returns a scalar per state in the batch)
         logprobs_np = logprobs.squeeze().cpu().numpy()
+        bpds_np = bpds.squeeze().cpu().numpy()
 
     print("Evaluation complete.")
 
@@ -104,19 +108,26 @@ def evaluate_world_model_line(cfg: dict):
     formatter.set_scientific(False)
 
     # Single plot for the OOD Logprob
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-    ax.plot(angles_np, logprobs_np, color='tab:red', linewidth=3, marker='o', markersize=4)
-    ax.set_title(f'OOD Log-Probability vs. Pitch (Height={CONSTANT_HEIGHT})')
-    ax.set_xlabel('Pitch Angle (rad)')
-    ax.set_ylabel('Log-Probability')
-    ax.yaxis.set_major_formatter(formatter)
-    ax.grid(True, linestyle='--', alpha=0.7)
+    axs[0].plot(angles_np, logprobs_np, color='tab:red', linewidth=3, marker='o', markersize=4)
+    axs[0].set_title(f'In-Distribution Log-Probability vs. Pitch (Height={CONSTANT_HEIGHT})')
+    axs[0].set_xlabel('Pitch Angle (rad)')
+    axs[0].set_ylabel('Log-Probability')
+    axs[0].yaxis.set_major_formatter(formatter)
+    axs[0].grid(True, linestyle='--', alpha=0.7)
+
+    axs[1].plot(angles_np, bpds_np, color='tab:red', linewidth=3, marker='o', markersize=4)
+    axs[1].set_title(f'In-Distribution Bits Per Dimension vs. Pitch (Height={CONSTANT_HEIGHT})')
+    axs[1].set_xlabel('Pitch Angle (rad)')
+    axs[1].set_ylabel('Bits/Dim')
+    axs[1].yaxis.set_major_formatter(formatter)
+    axs[1].grid(True, linestyle='--', alpha=0.7)
 
     plt.tight_layout()
     plt.show()
 
-    return angles_np, logprobs_np, next_z
+    return angles_np, logprobs_np, z_next
 
 if __name__ == "__main__":
     evaluate_world_model_line()

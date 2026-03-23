@@ -145,12 +145,16 @@ class WorldModel(nn.Module):
 		z_prev = torch.cat([z_prev, a], dim=-1)
 		return self._flow.forward_kld(z_next, context=z_prev)
 
-	def ood_logprob(self, z_next, z_prev, a, task):
+	def id_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:
 				z_prev = self.task_emb(z_prev, task)
 			z_prev = torch.cat([z_prev, a], dim=-1)
 			return self._flow.log_prob(z_next, context=z_prev)
+
+	def id_bpd(self, z_next, z_prev, a, task):
+		id_logprob = self.id_logprob(z_next, z_prev, a, task)
+		return id_logprob / z_next.shape[-1] / torch.log(torch.tensor(2, dtype=torch.float32))
 
 	def reward(self, z, a, task):
 		"""
