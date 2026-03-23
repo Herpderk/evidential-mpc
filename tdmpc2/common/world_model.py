@@ -44,6 +44,12 @@ class WorldModel(nn.Module):
 		self.apply(init.weight_init)
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
 
+		# Need to initialize the final conditioner layer to 0
+		for flow_layer in self._flow.flows:
+			if hasattr(flow_layer, 'conditioner'):
+				nn.init.zeros_(flow_layer.conditioner.mlp[-1].weight)
+				nn.init.zeros_(flow_layer.conditioner.mlp[-1].bias)
+
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
 		self.init()
