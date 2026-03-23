@@ -140,9 +140,9 @@ class ConditionalCouplingConditioner(nn.Module):
 
 
 class ConditionalAffineCoupling(nf.flows.Flow):
-	def __init__(self, feature_dim, context_dim, hidden_dim):
+	def __init__(self, feature_dim, context_dim, hidden_dim, act=None):
 		super().__init__()
-		self.conditioner = ConditionalCouplingConditioner(feature_dim, context_dim, hidden_dim)
+		self.conditioner = ConditionalCouplingConditioner(feature_dim, context_dim, hidden_dim, act=None)
 
 	def forward(self, z, context=None):
 		# 1. Split latent in half
@@ -190,10 +190,10 @@ class ConditionalReverse(nf.flows.Flow):
         return z.flip(dims=[-1]), log_det
 
 
-def acf(feature_dim, context_dim, hidden_dim, num_layers):
+def acf(feature_dim, context_dim, hidden_dim, num_layers, act=None):
 	flows = []
 	for i in range(num_layers):
-		flows += [ConditionalAffineCoupling(feature_dim, context_dim, hidden_dim)]
+		flows += [ConditionalAffineCoupling(feature_dim, context_dim, hidden_dim, act=act)]
 		flows += [ConditionalReverse()]
 	q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
 	return nf.ConditionalNormalizingFlow(q0=q0, flows=flows)
