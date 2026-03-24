@@ -18,7 +18,7 @@ reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-flow_coef: 1
+flow_coef: 0.001
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
