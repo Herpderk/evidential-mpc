@@ -296,13 +296,11 @@ class TDMPC2(torch.nn.Module):
 			steepness = 1e-5             # Controls how fast the drop is
 			decay = 1 / (1 + exp(steepness * (self.step - midpoint)))	# Sigmoid Decay Formula
 			lam = LAM_MIN + (LAM_MAX - LAM_MIN) * decay
-
-			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			reg_loss = torch.abs((_next_z - gamma) / aleatoric)**2 * (2 * nu + alpha)
+			#aleatoric = aleatoric_uncertainty(nu, alpha, beta)
+			reg_loss = torch.abs(_next_z - gamma) * (2 * nu + alpha)
 
 			# Aggregate batched losses
-			loss_change = (nll_loss + lam * reg_loss).mean()
-			consistency_loss += loss_change * self.cfg.rho**t
+			consistency_loss += (nll_loss + lam * reg_loss).mean() * self.cfg.rho**t
 			zs[t+1] = gamma
 
 		# Predictions

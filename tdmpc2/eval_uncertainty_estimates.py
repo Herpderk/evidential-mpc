@@ -100,8 +100,8 @@ def evaluate_world_model_line(cfg: dict):
         value_scalars = value_preds.argmax(dim=-1).float().cpu().numpy()
 
         # Calculate Mean of uncertainties across latent dims
-        aleatoric_vec = aleatoric_uncertainty(nu, alpha, beta)
-        epistemic_vec = epistemic_uncertainty(nu)
+        aleatoric_vec = aleatoric_uncertainty(alpha, beta)
+        epistemic_vec = epistemic_uncertainty(nu, alpha, beta)
 
         aleatoric_mean = torch.mean(aleatoric_vec, dim=-1).cpu().numpy()
 
