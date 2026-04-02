@@ -158,6 +158,10 @@ class WorldModel(nn.Module):
 		for param in self._flow.parameters():
 			param.requires_grad = requires_grad
 
+	def toggle_encoder_grad(self, requires_grad: bool):
+		for param in self._encoder.parameters():
+			param.requires_grad = requires_grad
+
 	def id_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:

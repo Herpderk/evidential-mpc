@@ -278,11 +278,13 @@ class TDMPC2(torch.nn.Module):
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 			# Isolate the flow loss to the normalizing flow	# TODO UN-DETACHED HERE
+			self.model.toggle_encoder_grad(False)
 			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
-			with torch.no_grad():
-				_next_u = self.model.state2noise(_next_z, zs[t], _action, task).detach()
+			self.model.toggle_encoder_grad(True)
 
 			# Evaluate regression error
+			with torch.no_grad():
+				_next_u = self.model.state2noise(_next_z, zs[t], _action, task).detach()
 			gamma, nu, alpha, beta = self.model.next_noise(zs[t], _action, task)
 			squared_error = (gamma - _next_u) ** 2
 
@@ -301,9 +303,9 @@ class TDMPC2(torch.nn.Module):
 			consistency_loss += (nll_loss + self.cfg.evidential_reg_coef * reg_loss).mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
-			self.model.toggle_flow_grad(False)
+			#self.model.toggle_flow_grad(False)
 			zs[t+1] = self.model.noise2state(gamma, zs[t], _action, task)
-			self.model.toggle_flow_grad(True)
+			#self.model.toggle_flow_grad(True)
 
 		# Predictions
 		_zs = zs[:-1]
