@@ -38,6 +38,12 @@ class WorldModel(nn.Module):
             out_dim=4*cfg.latent_dim,    # Output normal inverse-gamma distribution params: (4, latent_dim)
             act=layers.SimNorm(cfg),
         )
+		self._flow = layers.acf(
+			feature_dim=cfg.latent_dim,
+			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+			flow_dim=cfg.flow_dim,
+			num_layers=cfg.num_flow_layers,
+		)
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -48,6 +54,11 @@ class WorldModel(nn.Module):
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
 		self.init()
+
+		# Need to initialize the final conditioner layer to 0
+		for flow_layer in self._flow.flows:
+			if hasattr(flow_layer, 'conditioner'):
+				flow_layer.conditioner.zero_final_layer()
 
 	def init(self):
 		# Create params
@@ -68,8 +79,8 @@ class WorldModel(nn.Module):
 
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
-		modules = ['Encoder', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		modules = ['Encoder', 'Flow', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
+		for i, m in enumerate([self._encoder, self._flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -125,9 +136,42 @@ class WorldModel(nn.Module):
 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
 		return self._encoder[self.cfg.obs](obs)
 
-	def next(self, z, a, task) -> NormalInverseGammaParams:
+	def state2noise(self, z_next, z_prev, a, task):
+		if self.cfg.multitask:
+			z_prev = self.task_emb(z_prev, task)
+		z_prev = torch.cat([z_prev, a], dim=-1)
+		return self._flow.inverse(z_next, context=z_prev)
+
+	def noise2state(self, u_next, z_prev, a, task):
+		if self.cfg.multitask:
+			z_prev = self.task_emb(z_prev, task)
+		z_prev = torch.cat([z_prev, a], dim=-1)
+		return self._flow.forward(u_next, context=z_prev)
+
+	def flow_loss(self, z_next, z_prev, a, task):
+		if self.cfg.multitask:
+			z_prev = self.task_emb(z_prev, task)
+		z_prev = torch.cat([z_prev, a], dim=-1)
+		return self._flow.forward_kld(z_next, context=z_prev)
+
+	def toggle_flow_grad(self, requires_grad: bool):
+		for param in self._flow.parameters():
+			param.requires_grad = requires_grad
+
+	def id_logprob(self, z_next, z_prev, a, task):
+		with torch.no_grad():
+			if self.cfg.multitask:
+				z_prev = self.task_emb(z_prev, task)
+			z_prev = torch.cat([z_prev, a], dim=-1)
+			return self._flow.log_prob(z_next, context=z_prev)
+
+	def id_bpd(self, z_next, z_prev, a, task):
+		id_logprob = self.id_logprob(z_next, z_prev, a, task)
+		return id_logprob / z_next.shape[-1] / torch.log(torch.tensor(2, dtype=torch.float32))
+
+	def next_noise(self, z, a, task) -> NormalInverseGammaParams:
 		"""
-		Predicts the next latent state given the current latent state and action.
+		Predicts the next state in noise space conditional on the current latent state and action.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
@@ -139,6 +183,14 @@ class WorldModel(nn.Module):
 		alpha = 1 + F.softplus(alpha_raw)
 		beta = F.softplus(beta_raw)
 		return NormalInverseGammaParams(gamma, nu, alpha, beta)
+
+	def next_latent(self, z, a, task):
+		"""
+		Predicts the next latent state given the current latent state and action.
+		"""
+		evidential_pred = self.next_noise(z, a, task)
+		u_next = evidential_pred.gamma
+		return self.noise2state(u_next, z, a, task)
 
 	def reward(self, z, a, task):
 		"""

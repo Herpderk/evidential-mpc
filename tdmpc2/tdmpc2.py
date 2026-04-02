@@ -25,6 +25,7 @@ class TDMPC2(torch.nn.Module):
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
+			{'params': self.model._flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
@@ -131,8 +132,7 @@ class TDMPC2(torch.nn.Module):
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			evidential_pred = self.model.next(z, actions[t], task)
-			z = evidential_pred.gamma
+			z = self.model.next_latent(z, actions[t], task)
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -162,8 +162,7 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				evidential_pred = self.model.next(_z, pi_actions[t], task)
-				_z = evidential_pred.gamma
+				_z = self.model.next_latent(_z, pi_actions[t], task)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -274,34 +273,37 @@ class TDMPC2(torch.nn.Module):
 
 		# Latent rollout
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-		z = self.model.encode(obs[0], task)
-		zs[0] = z
+		zs[0] = self.model.encode(obs[0], task)
+		flow_loss = 0
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			gamma, nu, alpha, beta = self.model.next(z, _action, task)
+			# Isolate the flow loss to the normalizing flow	# TODO UN-DETACHED HERE
+			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
+			with torch.no_grad():
+				_next_u = self.model.state2noise(_next_z, zs[t], _action, task).detach()
 
-			# Element-wise squared error
-			squared_error = (gamma - _next_z) ** 2
+			# Evaluate regression error
+			gamma, nu, alpha, beta = self.model.next_noise(zs[t], _action, task)
+			squared_error = (gamma - _next_u) ** 2
 
-			# Evidential NLL
+			# Evidential NLL regression loss
 			omega = 2 * beta * (1 + nu)
 			nll_loss = 0.5 * torch.log(PI / nu) - alpha * torch.log(omega) \
 						+ (alpha + 0.5) * torch.log(squared_error * nu + omega) \
 						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
 
 			# Evidential regularization
-			LAM_MAX = 1e-6
-			LAM_MIN = 1e-8
-			midpoint = self.cfg.steps // 2
-			steepness = 1e-5             # Controls how fast the drop is
-			decay = 1 / (1 + exp(steepness * (self.step - midpoint)))	# Sigmoid Decay Formula
-			lam = LAM_MIN + (LAM_MAX - LAM_MIN) * decay
-			#aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			reg_loss = torch.abs(_next_z - gamma) * (2 * nu + alpha)
+			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
+			#reg_loss = torch.abs(_next_z - gamma) * (2 * nu + alpha)
+			reg_loss = torch.abs((_next_u - gamma) / aleatoric)**2 * (2 * nu + alpha)
 
 			# Aggregate batched losses
-			consistency_loss += (nll_loss + lam * reg_loss).mean() * self.cfg.rho**t
-			zs[t+1] = gamma
+			consistency_loss += (nll_loss + self.cfg.evidential_reg_coef * reg_loss).mean() * self.cfg.rho**t
+
+			# Transform prediction from noise to latent space (Shield the flow from regression loss)
+			self.model.toggle_flow_grad(False)
+			zs[t+1] = self.model.noise2state(gamma, zs[t], _action, task)
+			self.model.toggle_flow_grad(True)
 
 		# Predictions
 		_zs = zs[:-1]
@@ -317,6 +319,7 @@ class TDMPC2(torch.nn.Module):
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
 				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
 
+		flow_loss = flow_loss / self.cfg.horizon
 		consistency_loss = consistency_loss / self.cfg.horizon
 		reward_loss = reward_loss / self.cfg.horizon
 		if self.cfg.episodic:
@@ -325,6 +328,7 @@ class TDMPC2(torch.nn.Module):
 			termination_loss = 0.
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
 		total_loss = (
+			self.cfg.flow_coef * flow_loss +
 			self.cfg.consistency_coef * consistency_loss +
 			self.cfg.reward_coef * reward_loss +
 			self.cfg.termination_coef * termination_loss +
@@ -346,6 +350,7 @@ class TDMPC2(torch.nn.Module):
 		# Return training statistics
 		self.model.eval()
 		info = TensorDict({
+			"flow_loss": flow_loss,
 			"consistency_loss": consistency_loss,
 			"reward_loss": reward_loss,
 			"value_loss": value_loss,

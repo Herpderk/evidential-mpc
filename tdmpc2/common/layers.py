@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from tensordict import from_modules
 from copy import deepcopy
 
+import normflows as nf
+
 
 class Ensemble(nn.Module):
 	"""
@@ -116,6 +118,113 @@ class NormedLinear(nn.Linear):
 			f"out_features={self.out_features}, "\
 			f"bias={self.bias is not None}{repr_dropout}, "\
 			f"act={self.act.__class__.__name__})"
+
+
+
+class ConditionalCouplingConditioner(nn.Module):
+	def __init__(self, feature_dim, context_dim, flow_dim, act=None):
+		super().__init__()
+		in_dim = (feature_dim // 2) + context_dim
+		out_dim = feature_dim
+		if act is None:
+			act = nn.SiLU()
+		self.mlp = nn.Sequential(
+			NormedLinear(in_dim, flow_dim, act=act),
+			NormedLinear(flow_dim, flow_dim, act=act),
+			nn.Linear(flow_dim, out_dim) # MUST REMAIN PURE LINEAR
+		)
+		self.zero_final_layer()
+
+	def zero_final_layer(self):
+		# Crucial for normalizing flows: initialize last layer with zeros
+		# This ensures the flow starts as an identity transformation
+		nn.init.zeros_(self.mlp[-1].weight)
+		nn.init.zeros_(self.mlp[-1].bias)
+
+	def forward(self, half_feature, context=None):
+		return self.mlp(torch.cat([half_feature, context], dim=-1))
+
+
+class ConditionalAffineCoupling(nf.flows.Flow):
+    def __init__(self, feature_dim, context_dim, flow_dim, use_preproc_logit=False, logit_eps=1e-6, act=None):
+        super().__init__()
+        self.use_preproc_logit = use_preproc_logit
+        self.logit_eps = abs(logit_eps)
+        self.conditioner = ConditionalCouplingConditioner(feature_dim, context_dim, flow_dim, act=act)
+
+    def forward(self, feature, context=None):
+        if self.use_preproc_logit:	# Pre-processing step for unbounding features between 0 and 1
+            # Contract feature away from 0 and 1 and apply logit transform
+            y = self.logit_eps + (1 - 2 * self.logit_eps) * feature
+            feature = torch.log(y / (1 - y))
+
+        # Split feature in half
+        feat_1, feat_2 = feature.chunk(2, dim=-1)
+
+        # Get scale and shift
+        scale, shift = self.conditioner(feat_1, context=context).chunk(2, dim=-1)
+        scale = torch.tanh(scale)
+
+        # Transform feat_2
+        feat_2 = feat_2 * torch.exp(scale) + shift
+        feat_out = torch.cat([feat_1, feat_2], dim=-1)
+
+        # Return transformed feature and log determinant (volume change)
+        log_det = torch.sum(scale, dim=-1)
+        return feat_out, log_det
+
+    def inverse(self, feature, context=None):
+        # Split feature in half
+        feat_1, feat_2 = feature.chunk(2, dim=-1)
+
+        # Get scale and shift (MUST use feat_1, which is unchanged)
+        scale, shift = self.conditioner(feat_1, context=context).chunk(2, dim=-1)
+        scale = torch.tanh(scale)
+
+        # Inverse transform feat_2
+        feat_2 = (feat_2 - shift) * torch.exp(-scale)
+        feat_out = torch.cat([feat_1, feat_2], dim=-1)
+
+        # Inverse log determinant of the coupling layer
+        log_det = -torch.sum(scale, dim=-1)
+
+		# We don't apply the inverse of the logit transform since we treat it like a pre-processing step
+        return feat_out, log_det
+
+
+class ConditionalReverse(nf.flows.Flow):
+    def forward(self, z, context=None):
+        # Zero log-det because swapping doesn't change volume
+        log_det = torch.zeros(*z.shape[:-1], device=z.device)
+        return z.flip(dims=[-1]), log_det
+
+    def inverse(self, z, context=None):
+        log_det = torch.zeros(*z.shape[:-1], device=z.device)
+        return z.flip(dims=[-1]), log_det
+
+
+def acf(feature_dim, context_dim, flow_dim, num_layers, act=None):
+	flows = []
+	for i in range(num_layers):
+		if i == 0:
+			use_preproc_logit = True
+		else:
+			use_preproc_logit = False
+		flows += [ConditionalAffineCoupling(feature_dim, context_dim, flow_dim, use_preproc_logit=use_preproc_logit, act=act)]
+		flows += [ConditionalReverse()]
+	q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
+	return nf.ConditionalNormalizingFlow(q0=q0, flows=flows)
+
+
+def maf(feature_dim, context_dim, flow_dim, num_layers, num_blocks=2):
+    flows = []
+    for i in range(num_layers):
+        flows += [nf.flows.MaskedAffineAutoregressive(feature_dim, flow_dim,
+                                                    context_features=context_dim,
+                                                    num_blocks=num_blocks)]
+        flows += [nf.flows.LULinearPermute(feature_dim)]
+    q0 = nf.distributions.DiagGaussian(feature_dim, trainable=False)
+    return nf.ConditionalNormalizingFlow(q0, flows)
 
 
 def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
