@@ -281,7 +281,7 @@ class TDMPC2(torch.nn.Module):
 			#self.model.toggle_encoder_grad(False)
 			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
 			#self.model.toggle_encoder_grad(True)
-			z = self.model.next(z, _action, task)
+			z = self.model.next(zs[t], _action, task)
 			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
