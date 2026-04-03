@@ -10,13 +10,6 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
 
-class NormalInverseGammaParams(NamedTuple):
-    gamma: torch.Tensor
-    nu: torch.Tensor
-    alpha: torch.Tensor
-    beta: torch.Tensor
-
-
 class WorldModel(nn.Module):
 	"""
 	TD-MPC2 implicit world model architecture.
@@ -35,7 +28,7 @@ class WorldModel(nn.Module):
 		self._dynamics = layers.mlp(
             in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
             mlp_dims=2*[cfg.mlp_dim],
-            out_dim=4*cfg.latent_dim,    # Output normal inverse-gamma distribution params: (4, latent_dim)
+            out_dim=cfg.latent_dim,
             act=layers.SimNorm(cfg),
         )
 		self._flow = layers.acf(
@@ -173,28 +166,14 @@ class WorldModel(nn.Module):
 		id_logprob = self.id_logprob(z_next, z_prev, a, task)
 		return id_logprob / z_next.shape[-1] / torch.log(torch.tensor(2, dtype=torch.float32))
 
-	def next_noise(self, z, a, task) -> NormalInverseGammaParams:
+	def next(self, z, a, task):
 		"""
-		Predicts the next state in noise space conditional on the current latent state and action.
+		Predicts the next latent state.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		distribution_params = self._dynamics(z)
-
-		gamma, nu_raw, alpha_raw, beta_raw = distribution_params.chunk(4, dim=-1)
-		nu = F.softplus(nu_raw)
-		alpha = 1 + F.softplus(alpha_raw)
-		beta = F.softplus(beta_raw)
-		return NormalInverseGammaParams(gamma, nu, alpha, beta)
-
-	def next_latent(self, z, a, task):
-		"""
-		Predicts the next latent state given the current latent state and action.
-		"""
-		evidential_pred = self.next_noise(z, a, task)
-		u_next = evidential_pred.gamma
-		return self.noise2state(u_next, z, a, task)
+		return self._dynamics(z)
 
 	def reward(self, z, a, task):
 		"""
