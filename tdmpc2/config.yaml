@@ -18,7 +18,7 @@ reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
-flow_coef: 0.00 # 0.001
+flow_coef: 0.001
 evidential_reg_coef: 1e-4
 rho: 0.5
 lr: 3e-4
@@ -69,7 +69,7 @@ dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: tdmpc2-flow/hopper-hop
+wandb_project: tdmpc2-flow-hopper-hop
 wandb_entity: ???
 wandb_silent: false
 enable_wandb: true
