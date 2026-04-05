@@ -262,6 +262,10 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
+	def _toggle_grad(self, module, requires_grad):
+		for param in module.parameters():
+			param.requires_grad = requires_grad
+
 	def _update(self, obs, action, reward, terminated, task=None):
 		# Compute targets
 		with torch.no_grad():
@@ -277,7 +281,6 @@ class TDMPC2(torch.nn.Module):
 		flow_loss = 0
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			# Isolate the flow loss to the normalizing flow
 			#self.model.toggle_encoder_grad(False)
 			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
 			#self.model.toggle_encoder_grad(True)
@@ -303,9 +306,9 @@ class TDMPC2(torch.nn.Module):
 			consistency_loss += (nll_loss + self.cfg.evidential_reg_coef * reg_loss).mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
-			self.model.toggle_flow_grad(False)
+			self._toggle_grad(self.model._flow, False)
 			zs[t+1] = self.model.noise2state(gamma, zs[t], _action, task)
-			self.model.toggle_flow_grad(True)
+			self._toggle_grad(self.model._flow, True)
 
 		# Predictions
 		_zs = zs[:-1]

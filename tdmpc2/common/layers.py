@@ -120,7 +120,6 @@ class NormedLinear(nn.Linear):
 			f"act={self.act.__class__.__name__})"
 
 
-
 class ConditionalCouplingConditioner(nn.Module):
 	def __init__(self, feature_dim, context_dim, flow_dim, act=None):
 		super().__init__()

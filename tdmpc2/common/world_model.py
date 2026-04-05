@@ -154,14 +154,6 @@ class WorldModel(nn.Module):
 		z_prev = torch.cat([z_prev, a], dim=-1)
 		return self._flow.forward_kld(z_next, context=z_prev)
 
-	def toggle_flow_grad(self, requires_grad: bool):
-		for param in self._flow.parameters():
-			param.requires_grad = requires_grad
-
-	def toggle_encoder_grad(self, requires_grad: bool):
-		for param in self._encoder.parameters():
-			param.requires_grad = requires_grad
-
 	def id_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:
