@@ -1,4 +1,4 @@
-name: evidence-mpc
+name: evidential-mpc
 channels:
   - pytorch-nightly
   - nvidia
