@@ -126,7 +126,7 @@ class ConditionalCouplingConditioner(nn.Module):
 		in_dim = (feature_dim // 2) + context_dim
 		out_dim = feature_dim
 		if act is None:
-			act = nn.SiLU()
+			act = nn.Mish(inplace=False)
 		self.mlp = nn.Sequential(
 			NormedLinear(in_dim, flow_dim, act=act),
 			NormedLinear(flow_dim, flow_dim, act=act),
@@ -249,9 +249,9 @@ def conv(in_shape, num_channels, act=None):
 	assert in_shape[-1] == 64 # assumes rgb observations to be 64x64
 	layers = [
 		ShiftAug(), PixelPreprocess(),
-		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
-		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
-		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
+		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.Mish(inplace=False),
+		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.Mish(inplace=False),
+		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.Mish(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten()]
 	if act:
 		layers.append(act)
