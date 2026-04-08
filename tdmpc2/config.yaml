@@ -12,7 +12,7 @@ eval_episodes: 10
 eval_freq: 50000
 
 # training
-steps: 200_000
+steps: 500_000
 batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
@@ -29,7 +29,7 @@ tau: 0.01
 discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
-buffer_size: 25_000
+buffer_size: 100_000
 exp_name: default
 data_dir: ???
 
@@ -58,7 +58,7 @@ vmax: +10
 model_size: 5
 num_enc_layers: 2
 enc_dim: 256
-num_flow_layers: 4
+num_flow_layers: 2
 flow_dim: 256
 num_channels: 32
 mlp_dim: 512
@@ -69,7 +69,7 @@ dropout: 0.01
 simnorm_dim: 8
 
 # logging
-wandb_project: hopper-hop
+wandb_project: ???
 wandb_entity: ???
 wandb_silent: false
 enable_wandb: true
