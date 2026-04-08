@@ -1,4 +1,4 @@
-name: latent-evidential-trajopt
+name: evidence-mpc
 channels:
   - pytorch-nightly
   - nvidia
