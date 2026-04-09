@@ -41,7 +41,7 @@ class WorldModel(nn.Module):
 		self._flow = layers.acf(
 			feature_dim=cfg.latent_dim,
 			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-			flow_dim=cfg.flow_dim,
+			conditioner_dims=max(cfg.num_flow_cond_layers-1, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
@@ -55,10 +55,10 @@ class WorldModel(nn.Module):
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
 		self.init()
 
-		# Need to initialize the final conditioner layer to 0
+		# Need to initialize the final conditioner layers to 0
 		for flow_layer in self._flow.flows:
-			if hasattr(flow_layer, 'conditioner'):
-				flow_layer.conditioner.zero_final_layer()
+			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
+				flow_layer.zero_final_conditioner_layer()
 
 	def init(self):
 		# Create params
