@@ -208,7 +208,6 @@ class WorldModel(nn.Module):
 			return self._termination(z)
 		return torch.sigmoid(self._termination(z))
 
-
 	def pi(self, z, task):
 		"""
 		Samples an action from the policy prior.

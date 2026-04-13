@@ -4,7 +4,7 @@ defaults:
 # environment
 task: ???
 obs: rgb
-episodic: false
+episodic: true
 
 # evaluation
 checkpoint: ???
@@ -19,7 +19,7 @@ value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
 flow_coef: 0.001
-evidential_reg_coef: 1e-4
+evidential_reg_coef: 1e-2
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
@@ -29,7 +29,7 @@ tau: 0.01
 discount_denom: 5
 discount_min: 0.95
 discount_max: 0.995
-buffer_size: 100_000
+buffer_size: 1_000_000
 exp_name: default
 data_dir: ???
 
