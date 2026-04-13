@@ -59,8 +59,8 @@ model_size: 5
 num_enc_layers: 2
 enc_dim: 256
 num_flow_layers: 2
-flow_cond_dim: 256
-num_flow_cond_layers: 2
+flow_cond_dim: 512
+num_flow_cond_layers: 1
 num_channels: 32
 mlp_dim: 512
 latent_dim: 512

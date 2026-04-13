@@ -41,7 +41,7 @@ class WorldModel(nn.Module):
 		self._flow = layers.acf(
 			feature_dim=cfg.latent_dim,
 			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-			conditioner_dims=max(cfg.num_flow_cond_layers-1, 1) * [cfg.flow_cond_dim],
+			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
