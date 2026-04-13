@@ -19,9 +19,10 @@ CONSTANT_HEIGHT = 0.5  # Adjust this to your cheetah's typical resting height
 ANGLE_RANGE = (-np.pi, np.pi)
 RESOLUTION = 50
 
-@hydra.main(config_name='config', config_path='.')
+@hydra.main(config_name='config', config_path='..')
 def evaluate_world_model_line(cfg: dict):
     """Loads the TD-MPC2 agent and evaluates uncertainty across pitch angles."""
+    cfg['task'] = 'cup-catch'
     cfg = parse_cfg(cfg)
 
     env = make_env(cfg)
@@ -85,7 +86,7 @@ def evaluate_world_model_line(cfg: dict):
 
     with torch.no_grad():
         z = agent.model.encode(obs_batch, task=None)
-        next_z, nu, alpha, beta = agent.model.next(z, action_batch, task=None)
+        next_z, nu, alpha, beta = agent.model.next_noise(z, action_batch, task=None)
 
         # Reward and Value
         reward_preds = agent.model.reward(z, action_batch, task=None)
