@@ -25,7 +25,8 @@ class TDMPC2(torch.nn.Module):
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-			{'params': self.model._flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
+			{'params': self.model._target_flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
+			{'params': self.model._evidence_flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
@@ -323,9 +324,9 @@ class TDMPC2(torch.nn.Module):
 			consistency_loss += natpn_loss.mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
-			self._toggle_grad(self.model._flow, False)
+			self._toggle_grad(self.model._target_flow, False)
 			zs[t+1] = self.model.noise2state(mu, zs[t], _action, task)
-			self._toggle_grad(self.model._flow, True)
+			self._toggle_grad(self.model._target_flow, True)
 
 		# Predictions
 		_zs = zs[:-1]

@@ -68,10 +68,10 @@ class WorldModel(nn.Module):
 		self.init()
 
 		# Need to initialize the final conditioner layers to 0
-		for flow_layer in self._evidence_flow.flows:
+		for flow_layer in self._target_flow.flows:
 			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
 				flow_layer.zero_final_conditioner_layer()
-		for flow_layer in self._target_flow.flows:
+		for flow_layer in self._evidence_flow.flows:
 			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
 				flow_layer.zero_final_conditioner_layer()
 
