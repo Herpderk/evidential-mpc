@@ -298,7 +298,8 @@ class TDMPC2(torch.nn.Module):
 						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
 
 			# Evidential regularization
-			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
+			#aleatoric = aleatoric_uncertainty(nu, alpha, beta)
+			aleatoric = aleatoric_uncertainty(alpha, beta)
 			#reg_loss = torch.abs(_next_z - gamma) * (2 * nu + alpha)
 			reg_loss = torch.abs((_next_u - gamma) / aleatoric) * (2 * nu + alpha)
 

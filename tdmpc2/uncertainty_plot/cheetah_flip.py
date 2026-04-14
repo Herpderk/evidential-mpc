@@ -5,6 +5,11 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
 
+import sys
+from pathlib import Path
+tdmpc2_path = Path(__file__).parent.parent
+sys.path.append(str(tdmpc2_path))
+
 from common.evidential import aleatoric_uncertainty, epistemic_uncertainty
 from common.parser import parse_cfg
 from envs import make_env
@@ -22,7 +27,7 @@ RESOLUTION = 50
 @hydra.main(config_name='config', config_path='..')
 def evaluate_world_model_line(cfg: dict):
     """Loads the TD-MPC2 agent and evaluates uncertainty across pitch angles."""
-    cfg['task'] = 'cup-catch'
+    cfg['task'] = 'cheetah-flip'
     cfg = parse_cfg(cfg)
 
     env = make_env(cfg)
@@ -101,8 +106,8 @@ def evaluate_world_model_line(cfg: dict):
         value_scalars = value_preds.argmax(dim=-1).float().cpu().numpy()
 
         # Calculate Mean of uncertainties across latent dims
-        aleatoric_vec = aleatoric_uncertainty(nu, alpha, beta)
-        epistemic_vec = epistemic_uncertainty(nu)
+        aleatoric_vec = aleatoric_uncertainty(alpha, beta)
+        epistemic_vec = epistemic_uncertainty(nu, alpha, beta)
 
         aleatoric_mean = torch.mean(aleatoric_vec, dim=-1).cpu().numpy()
 
