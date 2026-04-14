@@ -1,5 +1,6 @@
 from copy import deepcopy
 from typing import NamedTuple
+from math import pi as PI
 
 import torch
 import torch.nn as nn
@@ -41,7 +42,7 @@ class WorldModel(nn.Module):
 		self._evidence_flow = layers.acf(
 			feature_dim=cfg.latent_dim + cfg.action_dim,
 			context_dim=0,
-			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
+			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.latent_dim + cfg.action_dim],
 			num_layers=cfg.num_flow_layers,
 		)
 		self._dynamics = layers.mlp(
@@ -50,8 +51,11 @@ class WorldModel(nn.Module):
             out_dim=2*cfg.latent_dim,    # Output posterior update params
             act=layers.SimNorm(cfg),
         )
-		self.register_buffer("_evidence_prior", torch.ones(cfg.latent_dim))  # Prior evidence for conjugate update in dynamics
-		self.register_buffer("_double_evidence_prior", torch.ones(2*cfg.latent_dim))  # Duplicated prior evidence for vectorized posterior parameter update
+		self.register_buffer(
+      		"_certainty_budget",
+			torch.exp((cfg.latent_dim+cfg.action_dim) * torch.log(torch.sqrt(4*PI)))
+   		)
+		self.register_buffer("_evidence_prior", torch.tensor(1.0))  # Prior evidence for conjugate update in dynamics
 		self.register_buffer("_param_prior", torch.cat([
 	  		torch.zeros(cfg.latent_dim),
 		 	100.0 * torch.ones(cfg.latent_dim)], dim=-1))  # Prior parameters for conjugate update in dynamics
@@ -188,13 +192,11 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
 		param_update = self._dynamics(z)
-		evidence_update = self._evidence_flow.inverse(z)
+		evidence_update = self._certainty_budget * torch.exp(self._evidence_flow.log_prob(z))
 		evidence_post = self._evidence_prior + evidence_update
 
 		# Duplicate evidence for vectorized posterior parameter update
-		double_evidence_update = torch.cat([evidence_update, evidence_update], dim=-1)
-		double_evidence_post = torch.cat([evidence_post, evidence_post], dim=-1)
-		param_post = (self._double_evidence_prior*self._param_prior + double_evidence_update*param_update) / double_evidence_post
+		param_post = (self._evidence_prior*self._param_prior + evidence_update*param_update) / evidence_post
 
 		# Derive conjugate prior distribution from posterior parameters
 		param_post_1, param_post_2 = param_post.chunk(2, dim=-1)
