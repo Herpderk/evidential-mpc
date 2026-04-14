@@ -50,11 +50,11 @@ class WorldModel(nn.Module):
             out_dim=2*cfg.latent_dim,    # Output posterior update params
             act=layers.SimNorm(cfg),
         )
-		self._evidence_prior = torch.ones(cfg.latent_dim, device=cfg.device)  # Prior evidence for conjugate update in dynamics
-		self._double_evidence_prior = torch.ones(2*cfg.latent_dim, device=cfg.device)  # Duplicated prior evidence for vectorized posterior parameter update
-		self._param_prior = torch.cat([
-      		torch.zeros(cfg.latent_dim, device=cfg.device),
-         	100.0 * torch.ones(cfg.latent_dim, device=cfg.device)], dim=-1)  # Prior parameters for conjugate update in dynamics
+		self.register_buffer("_evidence_prior", torch.ones(cfg.latent_dim))  # Prior evidence for conjugate update in dynamics
+		self.register_buffer("_double_evidence_prior", torch.ones(2*cfg.latent_dim))  # Duplicated prior evidence for vectorized posterior parameter update
+		self.register_buffer("_param_prior", torch.cat([
+	  		torch.zeros(cfg.latent_dim),
+		 	100.0 * torch.ones(cfg.latent_dim)], dim=-1))  # Prior parameters for conjugate update in dynamics
 
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
