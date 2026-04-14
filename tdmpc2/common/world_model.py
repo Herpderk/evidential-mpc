@@ -56,8 +56,8 @@ class WorldModel(nn.Module):
 			torch.exp((cfg.latent_dim+cfg.action_dim) * torch.log(torch.tensor(4*PI))))
 		self.register_buffer("_evidence_prior", torch.tensor(1.0))  # Prior evidence for conjugate update in dynamics
 		self.register_buffer("_param_prior", torch.cat([
-	  		torch.zeros((1, cfg.latent_dim)),
-		 	100.0 * torch.ones((1, cfg.latent_dim))], dim=-1))  # Prior parameters for conjugate update in dynamics
+	  		torch.zeros(cfg.latent_dim),
+		 	100.0 * torch.ones(cfg.latent_dim)], dim=-1))  # Prior parameters for conjugate update in dynamics
 
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
@@ -196,7 +196,7 @@ class WorldModel(nn.Module):
 
 		# Duplicate evidence for vectorized posterior parameter update
 		print(self._evidence_prior.shape, self._param_prior.shape, evidence_update.shape, param_update.shape)
-		param_post = (self._evidence_prior*self._param_prior + evidence_update*param_update) / evidence_post
+		param_post = (self._evidence_prior*self._param_prior + evidence_update[:, None] * param_update) / evidence_post
 
 		# Derive conjugate prior distribution from posterior parameters
 		param_post_1, param_post_2 = param_post.chunk(2, dim=-1)
