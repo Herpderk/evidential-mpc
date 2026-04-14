@@ -303,27 +303,16 @@ class TDMPC2(torch.nn.Module):
 				-squared_error*alpha/beta - lam.reciprocal()		# lam == lambda in the NIG distribution
     			+ torch.digamma(alpha) - torch.log(beta) - torch.log(torch.tensor(2*PI))
 			)
-
 			conjprior_entropy = torch.zeros_like(ll_under_conjprior)
 			LOG_2PI = torch.log(torch.tensor(2 * PI))
-			large_mask = alpha > 1e4
-			small_mask = ~large_mask
-			if large_mask.any():
-				a_l = alpha[large_mask]
-				b_l = beta[large_mask]
-				l_l = lam[large_mask]
-				conjprior_entropy[large_mask] = (
-					1.0 + LOG_2PI - 2.0 * torch.log(a_l)
-					+ 1.5 * torch.log(b_l) - 0.5 * torch.log(l_l)
-				)
-			if small_mask.any():
-				a_s = alpha[small_mask]
-				b_s = beta[small_mask]
-				l_s = lam[small_mask]
-				conjprior_entropy[small_mask] = (
-					0.5 - 0.5 * torch.log(l_s) + a_s - (a_s + 1.5) * torch.digamma(a_s)
-					+ 0.5 * LOG_2PI + 1.5 * torch.log(b_s) + torch.lgamma(a_s)
-				)
+			entropy_large = (
+				1.0 + LOG_2PI - 2.0 * torch.log(alpha) + 1.5 * torch.log(beta) - 0.5 * torch.log(lam)
+			)
+			entropy_small = (
+				0.5 - 0.5 * torch.log(lam) + alpha - (alpha + 1.5) * torch.digamma(alpha)
+				+ 0.5 * LOG_2PI + 1.5 * torch.log(beta) + torch.lgamma(alpha)
+			)
+			conjprior_entropy = torch.where(alpha > 1e4, entropy_large, entropy_small)
 			natpn_loss = -ll_under_conjprior - self.cfg.evidential_reg_coef * conjprior_entropy
 
 			# Evidential regularization
