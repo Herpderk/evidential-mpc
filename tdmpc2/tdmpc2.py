@@ -301,11 +301,11 @@ class TDMPC2(torch.nn.Module):
 			# NatPN losses
 			ll_under_conjprior = 0.5 * (
 				-squared_error*alpha/beta - lam.reciprocal()		# lam == lambda in the NIG distribution
-    			+ torch.digamma(alpha) - torch.log(beta) - torch.log(2*PI)
+    			+ torch.digamma(alpha) - torch.log(beta) - torch.log(torch.tensor(2*PI))
 			)
 			if alpha > 1e4:
 				conjprior_entropy = (
-        			1.0 + torch.log(2*PI) - 2*torch.log(alpha)
+        			1.0 + torch.log(torch.tensor(2*PI)) - 2*torch.log(alpha)
            			+ 1.5*torch.log(beta) - 0.5*torch.log(lam)
 				)
 			else:
