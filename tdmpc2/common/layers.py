@@ -129,6 +129,8 @@ class ConditionalAffineCoupling(nf.flows.Flow):
 		self.zero_final_conditioner_layer()
 
 	def forward(self, feature, context=None):
+		context = context if context is not None else torch.tensor([], device=feature.device)
+
 		# Split feature in half
 		feat_1, feat_2 = feature.chunk(2, dim=-1)
 
@@ -145,6 +147,8 @@ class ConditionalAffineCoupling(nf.flows.Flow):
 		return feat_out, log_det
 
 	def inverse(self, feature, context=None):
+		context = context if context is not None else torch.tensor([], device=feature.device)
+
 		# Split feature in half
 		feat_1, feat_2 = feature.chunk(2, dim=-1)
 
