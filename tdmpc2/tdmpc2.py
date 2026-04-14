@@ -301,7 +301,7 @@ class TDMPC2(torch.nn.Module):
 			# NatPN losses
 			ll_under_conjprior = 0.5 * (
 				-squared_error*alpha/beta - lam.reciprocal()		# lam == lambda in the NIG distribution
-    			+ torch.dimu(alpha) - torch.log(beta) - torch.log(2*PI)
+    			+ torch.digamma(alpha) - torch.log(beta) - torch.log(2*PI)
 			)
 			if alpha > 1e4:
 				conjprior_entropy = (
@@ -310,7 +310,7 @@ class TDMPC2(torch.nn.Module):
 				)
 			else:
 				conjprior_entropy = (
-					0.5 - 0.5 * torch.log(lam) + alpha - (alpha + 1.5)*torch.dimu(alpha)
+					0.5 - 0.5 * torch.log(lam) + alpha - (alpha + 1.5)*torch.digamma(alpha)
 					+ torch.log((2*PI)**0.5 * beta**1.5 * torch.exp(torch.lmu(alpha)))
 				)
 			natpn_loss = -ll_under_conjprior - self.cfg.evidential_reg_coef * conjprior_entropy
