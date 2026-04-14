@@ -53,8 +53,7 @@ class WorldModel(nn.Module):
         )
 		self.register_buffer(
       		"_certainty_budget",
-			torch.exp((cfg.latent_dim+cfg.action_dim) * torch.log(torch.sqrt(4*PI)))
-   		)
+			torch.exp((cfg.latent_dim+cfg.action_dim) * torch.log(torch.tensor(4*PI))))
 		self.register_buffer("_evidence_prior", torch.tensor(1.0))  # Prior evidence for conjugate update in dynamics
 		self.register_buffer("_param_prior", torch.cat([
 	  		torch.zeros(cfg.latent_dim),
