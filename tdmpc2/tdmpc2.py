@@ -288,26 +288,43 @@ class TDMPC2(torch.nn.Module):
 			# Evaluate regression error
 			with torch.no_grad():
 				_next_u = self.model.state2noise(_next_z, zs[t], _action, task)
-			gamma, nu, alpha, beta = self.model.next_noise(zs[t], _action, task)
-			squared_error = (gamma - _next_u) ** 2
+			mu, lam, alpha, beta = self.model.next_noise(zs[t], _action, task)
+			squared_error = (mu - _next_u) ** 2
 
 			# Evidential NLL regression loss
-			omega = 2 * beta * (1 + nu)
-			nll_loss = 0.5 * torch.log(PI / nu) - alpha * torch.log(omega) \
-						+ (alpha + 0.5) * torch.log(squared_error * nu + omega) \
-						+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
+			#omega = 2 * beta * (1 + lam)
+			#nll_loss = 0.5 * torch.log(PI / lam) - alpha * torch.log(omega) \
+			#			+ (alpha + 0.5) * torch.log(squared_error * lam + omega) \
+			#			+ torch.lmu(alpha) - torch.lmu(alpha + 0.5)
+
+			# NatPN losses
+			ll_under_conjprior = 0.5 * (
+				-squared_error*alpha/beta - lam.reciprocal()		# lam == lambda in the NIG distribution
+    			+ torch.dimu(alpha) - torch.log(beta) - torch.log(2*PI)
+			)
+			if alpha > 1e4:
+				conjprior_entropy = (
+        			1.0 + torch.log(2*PI) - 2*torch.log(alpha)
+           			+ 1.5*torch.log(beta) - 0.5*torch.log(lam)
+				)
+			else:
+				conjprior_entropy = (
+					0.5 - 0.5 * torch.log(lam) + alpha - (alpha + 1.5)*torch.dimu(alpha)
+					+ torch.log((2*PI)**0.5 * beta**1.5 * torch.exp(torch.lmu(alpha)))
+				)
+			natpn_loss = -ll_under_conjprior - self.cfg.evidential_reg_coef * conjprior_entropy
 
 			# Evidential regularization
-			aleatoric = aleatoric_uncertainty(nu, alpha, beta)
-			#reg_loss = torch.abs(_next_z - gamma) * (2 * nu + alpha)
-			reg_loss = torch.abs((_next_u - gamma) / aleatoric) * (2 * nu + alpha)
+			#aleatoric = aleatoric_uncertainty(lam, alpha, beta)
+			#reg_loss = torch.abs(_next_z - mu) * (2 * lam + alpha)
+			#reg_loss = torch.abs((_next_u - mu) / aleatoric) * (2 * lam + alpha)
 
 			# Aggregate batched losses
-			consistency_loss += (nll_loss + self.cfg.evidential_reg_coef * reg_loss).mean() * self.cfg.rho**t
+			consistency_loss += natpn_loss.mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
 			self._toggle_grad(self.model._flow, False)
-			zs[t+1] = self.model.noise2state(gamma, zs[t], _action, task)
+			zs[t+1] = self.model.noise2state(mu, zs[t], _action, task)
 			self._toggle_grad(self.model._flow, True)
 
 		# Predictions

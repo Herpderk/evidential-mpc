@@ -10,9 +10,9 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictParams
 
 
-class NormalInverseGammaParams(NamedTuple):
-    gamma: torch.Tensor
-    nu: torch.Tensor
+class NormalInverseGamma(NamedTuple):
+    mu: torch.Tensor
+    lam: torch.Tensor
     alpha: torch.Tensor
     beta: torch.Tensor
 
@@ -32,18 +32,30 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		self._dynamics = layers.mlp(
-            in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-            mlp_dims=2*[cfg.mlp_dim],
-            out_dim=4*cfg.latent_dim,    # Output normal inverse-gamma distribution params: (4, latent_dim)
-            act=layers.SimNorm(cfg),
-        )
-		self._flow = layers.acf(
+		self._target_flow = layers.acf(
 			feature_dim=cfg.latent_dim,
 			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
 			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
+		self._evidence_flow = layers.acf(
+			feature_dim=cfg.latent_dim + cfg.action_dim,
+			context_dim=0,
+			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
+			num_layers=cfg.num_flow_layers,
+		)
+		self._dynamics = layers.mlp(
+            in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+            mlp_dims=2*[cfg.mlp_dim],
+            out_dim=2*cfg.latent_dim,    # Output posterior update params
+            act=layers.SimNorm(cfg),
+        )
+		self._evidence_prior = torch.ones(cfg.latent_dim, device=cfg.device)  # Prior evidence for conjugate update in dynamics
+		self._double_evidence_prior = torch.ones(2*cfg.latent_dim, device=cfg.device)  # Duplicated prior evidence for vectorized posterior parameter update
+		self._param_prior = torch.cat([
+      		torch.zeros(cfg.latent_dim, device=cfg.device),
+         	100.0 * torch.ones(cfg.latent_dim, device=cfg.device)], dim=-1)  # Prior parameters for conjugate update in dynamics
+
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
 		self._pi = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim)
@@ -56,7 +68,10 @@ class WorldModel(nn.Module):
 		self.init()
 
 		# Need to initialize the final conditioner layers to 0
-		for flow_layer in self._flow.flows:
+		for flow_layer in self._evidence_flow.flows:
+			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
+				flow_layer.zero_final_conditioner_layer()
+		for flow_layer in self._target_flow.flows:
 			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
 				flow_layer.zero_final_conditioner_layer()
 
@@ -80,7 +95,7 @@ class WorldModel(nn.Module):
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
 		modules = ['Encoder', 'Flow', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		for i, m in enumerate([self._encoder, self._target_flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -140,52 +155,66 @@ class WorldModel(nn.Module):
 		if self.cfg.multitask:
 			z_prev = self.task_emb(z_prev, task)
 		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._flow.inverse(z_next, context=z_prev)
+		return self._target_flow.inverse(z_next, context=z_prev)
 
 	def noise2state(self, u_next, z_prev, a, task):
 		if self.cfg.multitask:
 			z_prev = self.task_emb(z_prev, task)
 		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._flow.forward(u_next, context=z_prev)
+		return self._target_flow.forward(u_next, context=z_prev)
 
 	def flow_loss(self, z_next, z_prev, a, task):
 		if self.cfg.multitask:
 			z_prev = self.task_emb(z_prev, task)
 		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._flow.forward_kld(z_next, context=z_prev)
+		return self._target_flow.forward_kld(z_next, context=z_prev)
 
 	def id_logprob(self, z_next, z_prev, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:
 				z_prev = self.task_emb(z_prev, task)
 			z_prev = torch.cat([z_prev, a], dim=-1)
-			return self._flow.log_prob(z_next, context=z_prev)
+			return self._target_flow.log_prob(z_next, context=z_prev)
 
 	def id_bpd(self, z_next, z_prev, a, task):
 		id_logprob = self.id_logprob(z_next, z_prev, a, task)
 		return id_logprob / z_next.shape[-1] / torch.log(torch.tensor(2, dtype=torch.float32))
 
-	def next_noise(self, z, a, task) -> NormalInverseGammaParams:
+	def next_noise(self, z, a, task) -> NormalInverseGamma:
 		"""
 		Predicts the next state in noise space conditional on the current latent state and action.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
 		z = torch.cat([z, a], dim=-1)
-		distribution_params = self._dynamics(z)
+		param_update = self._dynamics(z)
+		evidence_update = self._evidence_flow.inverse(z)
+		evidence_post = self._evidence_prior + evidence_update
 
-		gamma, nu_raw, alpha_raw, beta_raw = distribution_params.chunk(4, dim=-1)
-		nu = F.softplus(nu_raw)
-		alpha = 1 + F.softplus(alpha_raw)
-		beta = F.softplus(beta_raw)
-		return NormalInverseGammaParams(gamma, nu, alpha, beta)
+		# Duplicate evidence for vectorized posterior parameter update
+		double_evidence_update = torch.cat([evidence_update, evidence_update], dim=-1)
+		double_evidence_post = torch.cat([evidence_post, evidence_post], dim=-1)
+		param_post = (self._double_evidence_prior*self._param_prior + double_evidence_update*param_update) / double_evidence_post
+
+		# Derive conjugate prior distribution from posterior parameters
+		param_post_1, param_post_2 = param_post.chunk(2, dim=-1)
+		mu = param_post_1
+		lam = evidence_post
+		alpha = evidence_post / 2
+		beta = 0.5 * evidence_post * (param_post_2 - param_post_1**2)
+
+		#mu, nu_raw, alpha_raw, beta_raw = distribution_params.chunk(4, dim=-1)
+		#lam = F.softplus(nu_raw)
+		#alpha = 1 + F.softplus(alpha_raw)
+		#beta = F.softplus(beta_raw)
+		return NormalInverseGamma(mu, lam, alpha, beta)
 
 	def next_latent(self, z, a, task):
 		"""
 		Predicts the next latent state given the current latent state and action.
 		"""
 		evidential_pred = self.next_noise(z, a, task)
-		u_next = evidential_pred.gamma
+		u_next = evidential_pred.mu
 		return self.noise2state(u_next, z, a, task)
 
 	def reward(self, z, a, task):
