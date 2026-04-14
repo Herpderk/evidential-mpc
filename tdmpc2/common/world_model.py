@@ -195,6 +195,7 @@ class WorldModel(nn.Module):
 		evidence_post = self._evidence_prior + evidence_update
 
 		# Duplicate evidence for vectorized posterior parameter update
+		print(self._evidence_prior.shape, self._param_prior.shape, evidence_update.shape, param_update.shape)
 		param_post = (self._evidence_prior*self._param_prior + evidence_update*param_update) / evidence_post
 
 		# Derive conjugate prior distribution from posterior parameters
