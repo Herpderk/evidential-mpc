@@ -1,4 +1,4 @@
-from math import pi as PI, exp
+from math import pi as PI
 
 import torch
 import torch.nn.functional as F
@@ -305,7 +305,7 @@ class TDMPC2(torch.nn.Module):
 			)
 
 			conjprior_entropy = torch.zeros_like(ll_under_conjprior)
-			LOG_2PI = math.log(2 *PI)
+			LOG_2PI = torch.log(torch.tensor(2 * PI))
 			large_mask = alpha > 1e4
 			small_mask = ~large_mask
 			if large_mask.any():
