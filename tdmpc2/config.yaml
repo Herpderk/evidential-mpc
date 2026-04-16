@@ -17,8 +17,8 @@ batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
-consistency_coef: 20
-flow_coef: 0.001
+consistency_coef: 0.5
+flow_coef: 0.0
 evidential_reg_coef: 1e-4
 rho: 0.5
 lr: 3e-4

@@ -282,7 +282,14 @@ class TDMPC2(torch.nn.Module):
 			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
 			#self.model.toggle_encoder_grad(True)
 			z = self.model.next(zs[t], _action, task)
-			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+
+			# Treat latent state as several categorical distributions
+			z_cats = z.view(*z.shape[:-1], -1, self.cfg.simnorm_dim)
+			_next_z_cats = _next_z.view(*_next_z.shape[:-1], -1, self.cfg.simnorm_dim)
+			ce_losses = math.soft_ce(z_cats, _next_z_cats, self.cfg, use_two_hot=False)
+			consistency_loss += ce_losses.sum(dim=-1).mean() * self.cfg.rho**t
+
+			#consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
 			zs[t+1] = z
 
 		# Predictions

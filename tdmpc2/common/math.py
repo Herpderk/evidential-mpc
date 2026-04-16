@@ -3,10 +3,10 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 
-def soft_ce(pred, target, cfg):
+def soft_ce(pred, target, cfg, use_two_hot=True):
 	"""Computes the cross entropy loss between predictions and soft targets."""
 	pred = F.log_softmax(pred, dim=-1)
-	target = two_hot(target, cfg)
+	target = two_hot(target, cfg) if use_two_hot else target
 	return -(target * pred).sum(-1, keepdim=True)
 
 
