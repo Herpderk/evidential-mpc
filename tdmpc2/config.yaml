@@ -17,10 +17,8 @@ batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
-consistency_coef: 10
+consistency_coef: 0.5
 cj_entropy_coef: 1e-4
-targetflow_coef: 1e-4
-targetflow_lr_scale: 1e+1
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
@@ -58,9 +56,6 @@ vmax: +10
 model_size: 5
 num_enc_layers: 2
 enc_dim: 256
-num_targetflow_layers: 2
-num_targetflow_cond_layers: 1
-targetflow_cond_dim: 512
 num_evidenceflow_layers: 2
 num_evidenceflow_cond_layers: 1
 evidenceflow_cond_dim: 512

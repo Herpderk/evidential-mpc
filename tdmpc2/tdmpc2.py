@@ -25,7 +25,6 @@ class TDMPC2(torch.nn.Module):
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-			{'params': self.model._target_flow.parameters(), 'lr': self.cfg.lr*self.cfg.targetflow_lr_scale},
 			{'params': self.model._evidence_flow.parameters()},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
@@ -133,7 +132,7 @@ class TDMPC2(torch.nn.Module):
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			z = self.model.next_evidential_noise(z, actions[t], task).mu#next_latent(z, actions[t], task)
+			z = self.model.next(z, actions[t], task)
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -163,7 +162,7 @@ class TDMPC2(torch.nn.Module):
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z = self.model.next_evidential_noise(_z, pi_actions[t], task).mu#next_latent(_z, pi_actions[t], task)
+				_z = self.model.next(_z, pi_actions[t], task)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -279,19 +278,22 @@ class TDMPC2(torch.nn.Module):
 		# Latent rollout
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
 		zs[0] = self.model.encode(obs[0], task)
-		targetflow_loss = 0
 		cj_entropy_loss = 0
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			# Convert prediction target into noise space and compute flow loss at once
-			_next_u, kld = self.model.target_noise_and_loss(_next_z, zs[t], _action, task)
-			kld = 0
-			targetflow_loss += kld * self.cfg.rho**t
-
-			# Evidential regression loss
-			evid_pred = self.model.next_evidential_noise(zs[t], _action, task)
+			# Evidential categorical loss
+			# TODO evid_pred = self.model.evidential_prediction(zs[t], _action, task)
+			# TODO cj_entropy_loss
+			# TODO nll_under_conjugate_prior
+			evid_pred = self.model.evidential_prediction(zs[t], _action, task)
 			cj_entropy_loss += self.model.conjugate_prior_entropy(evid_pred) * self.cfg.rho**t
 			consistency_loss += self.model.nll_under_conjugate_prior(_next_z, evid_pred) * self.cfg.rho**t
+
+			# Treat latent state as independent categorical distributions
+			z_cats = z.view(*z.shape[:-1], -1, self.cfg.simnorm_dim)
+			_next_z_cats = _next_z.view(*_next_z.shape[:-1], -1, self.cfg.simnorm_dim)
+			ce_losses = math.soft_ce(z_cats, _next_z_cats, self.cfg, use_two_hot=False)
+			consistency_loss += ce_losses.sum(dim=-1).mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the target flow from other losses)
 			self._toggle_grad(self.model._target_flow, False)
@@ -313,7 +315,6 @@ class TDMPC2(torch.nn.Module):
 			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
 				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
 
-		targetflow_loss = targetflow_loss / self.cfg.horizon
 		cj_entropy_loss = cj_entropy_loss / self.cfg.horizon
 		consistency_loss = consistency_loss / self.cfg.horizon
 		reward_loss = reward_loss / self.cfg.horizon
@@ -323,7 +324,6 @@ class TDMPC2(torch.nn.Module):
 			termination_loss = 0.
 		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
 		total_loss = (
-			self.cfg.targetflow_coef * targetflow_loss +
 			self.cfg.cj_entropy_coef * cj_entropy_loss +
 			self.cfg.consistency_coef * consistency_loss +
 			self.cfg.reward_coef * reward_loss +
@@ -346,7 +346,6 @@ class TDMPC2(torch.nn.Module):
 		# Return training statistics
 		self.model.eval()
 		info = TensorDict({
-			"targetflow_loss": targetflow_loss,
 			"cj_entropy_loss": cj_entropy_loss,
 			"consistency_loss": consistency_loss,
 			"reward_loss": reward_loss,

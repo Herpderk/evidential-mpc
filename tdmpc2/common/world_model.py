@@ -33,12 +33,6 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		self._target_flow = layers.acf(
-			feature_dim=cfg.latent_dim,
-			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-			conditioner_dims=max(cfg.num_targetflow_cond_layers, 1) * [cfg.targetflow_cond_dim],
-			num_layers=cfg.num_targetflow_layers,
-		)
 		self._evidence_flow = layers.acf(
 			feature_dim=cfg.latent_dim + cfg.action_dim,
 			context_dim=0,
@@ -48,7 +42,7 @@ class WorldModel(nn.Module):
 		self._dynamics = layers.mlp(
             in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
             mlp_dims=2*[cfg.mlp_dim],
-            out_dim=2*cfg.latent_dim,    # Output posterior update params
+            out_dim=cfg.latent_dim,    # Output posterior update params
             #act=layers.SimNorm(cfg),
         )
 		self._simnorm = layers.SimNorm(cfg)
@@ -73,9 +67,6 @@ class WorldModel(nn.Module):
 		self.init()
 
 		# Need to initialize the final conditioner layers to 0
-		for flow_layer in self._target_flow.flows:
-			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
-				flow_layer.zero_final_conditioner_layer()
 		for flow_layer in self._evidence_flow.flows:
 			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
 				flow_layer.zero_final_conditioner_layer()
@@ -100,7 +91,7 @@ class WorldModel(nn.Module):
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
 		modules = ['Encoder', 'Target flow', 'Evidence flow', 'Noise-space dynamics',  'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._target_flow, self._evidence_flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		for i, m in enumerate([self._encoder, self._evidence_flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -156,31 +147,6 @@ class WorldModel(nn.Module):
 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
 		return self._encoder[self.cfg.obs](obs)
 
-	def latent2noise(self, z_next, z_prev, a, task):
-		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._target_flow.inverse(z_next, context=z_prev)
-
-	def noise2latent(self, u_next, z_prev, a, task):
-		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._target_flow.forward(u_next, context=z_prev)
-
-	def target_noise_and_loss(self, z_next, z_prev, a, task):
-		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-
-		log_q = torch.zeros(len(z_next), device=z_next.device)
-		u_next = z_next
-		for i in range(len(self._target_flow.flows) - 1, -1, -1):
-			u_next, log_det = self._target_flow.flows[i].inverse(u_next, context=z_prev)
-			log_q += log_det
-		log_q += self._target_flow.q0.log_prob(u_next, context=z_prev)
-		return u_next, -torch.mean(log_q)
-
 	def nll_under_conjugate_prior(self, y, evid_pred: NormalInverseGamma):
 		mu, lam, alpha, beta = evid_pred
 		squared_error = (mu - y) ** 2
@@ -207,9 +173,9 @@ class WorldModel(nn.Module):
 		cj_entropy = torch.where(alpha > 1e4, entropy_large, entropy_small)
 		return cj_entropy.mean()
 
-	def next_evidential_noise(self, z, a, task) -> NormalInverseGamma:
+	def evidential_prediction(self, z, a, task) -> NormalInverseGamma:
 		"""
-		Predicts the next state and its uncertainties in conditional noise space.
+		Predicts the next latent state distribution.
 		"""
 		if self.cfg.multitask:
 			z = self.task_emb(z, task)
@@ -236,19 +202,11 @@ class WorldModel(nn.Module):
 		beta = 0.5 * evid_post * (sufstat_post_2 - sufstat_post_1**2)
 		return NormalInverseGamma(mu, lam, alpha, beta)
 
-	def next_noise(self, z, a, task):
-		"""
-		Predicts the next state in conditional noise space.
-		"""
-		evidential_pred = self.next_evidential_noise(z, a, task)
-		return evidential_pred.mu
-
-	def next_latent(self, z, a, task):
+	def next(self, z, a, task):
 		"""
 		Predicts the next state in latent space.
 		"""
-		u_next = self.next_noise(z, a, task)
-		return self.noise2latent(u_next, z, a, task)
+		# TODO
 
 	def reward(self, z, a, task):
 		"""
