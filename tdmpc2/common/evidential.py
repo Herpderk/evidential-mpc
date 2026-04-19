@@ -6,8 +6,11 @@ import torch
 def epistemic_uncertainty(nu, alpha, beta) -> torch.Tensor:
     return beta / (nu * (alpha-1)) """
 
-def aleatoric_uncertainty(nu, alpha, beta) -> torch.Tensor:
+""" def aleatoric_uncertainty(nu, alpha, beta) -> torch.Tensor:
     return torch.sqrt((beta*(1+nu)) / (alpha*nu))
 
 def epistemic_uncertainty(nu) -> torch.Tensor:
-    return 1 / torch.sqrt(nu)
+    return 1 / torch.sqrt(nu)"""
+
+def uncertainty(evid_pred):
+    return evid_pred.mu + 2*evid_pred.beta / evid_pred.lam

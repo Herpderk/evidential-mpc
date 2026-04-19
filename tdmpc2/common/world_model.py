@@ -33,31 +33,25 @@ class WorldModel(nn.Module):
 			for i in range(len(cfg.tasks)):
 				self._action_masks[i, :cfg.action_dims[i]] = 1.
 		self._encoder = layers.enc(cfg)
-		self._target_flow = layers.acf(
-			feature_dim=cfg.latent_dim,
-			context_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
+		self._chunked_alr = layers.ChunkedALR(cfg)
+		self._alr_dim = cfg.latent_dim - int(cfg.latent_dim/cfg.simnorm_dim)
+		self._dynamics = layers.mlp(
+            in_dim=self._alr_dim + cfg.action_dim + cfg.task_dim,
+            mlp_dims=2*[cfg.mlp_dim],
+            out_dim=2*self._alr_dim,    # Output posterior update params
+            #act=layers.SimNorm(cfg),
+        )
+		self._evidence_flow = layers.acf(
+			feature_dim=self._alr_dim + cfg.action_dim,
+			context_dim=0,
 			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
-		self._evidence_flow = layers.acf(
-			feature_dim=cfg.latent_dim + cfg.action_dim,
-			context_dim=0,
-			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.latent_dim + cfg.action_dim],
-			num_layers=cfg.num_flow_layers,
-		)
-		self._dynamics = layers.mlp(
-            in_dim=cfg.latent_dim + cfg.action_dim + cfg.task_dim,
-            mlp_dims=2*[cfg.mlp_dim],
-            out_dim=2*cfg.latent_dim,    # Output posterior update params
-            act=layers.SimNorm(cfg),
-        )
-		self.register_buffer(
-      		"_certainty_budget",
-			(cfg.latent_dim+cfg.action_dim) * torch.log(torch.tensor(4*PI)))
-		self.register_buffer("_evidence_prior", torch.tensor(1.0))  # Prior evidence for conjugate update in dynamics
-		self.register_buffer("_param_prior", torch.cat([
-	  		torch.zeros(cfg.latent_dim),
-		 	100.0 * torch.ones(cfg.latent_dim)], dim=-1))  # Prior parameters for conjugate update in dynamics
+		self.register_buffer("_log_NH", torch.tensor(self._alr_dim+cfg.action_dim))
+		self.register_buffer("_log_n_prior", torch.tensor(0.0))  # Prior evidence for conjugate update in dynamics
+		self.register_buffer("_chi_prior", torch.cat([
+	  		torch.zeros(self._alr_dim),
+		 	cfg.var_prior * torch.ones(self._alr_dim)], dim=-1))  # Prior parameters for conjugate update in dynamics
 
 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
@@ -71,9 +65,6 @@ class WorldModel(nn.Module):
 		self.init()
 
 		# Need to initialize the final conditioner layers to 0
-		for flow_layer in self._target_flow.flows:
-			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
-				flow_layer.zero_final_conditioner_layer()
 		for flow_layer in self._evidence_flow.flows:
 			if hasattr(flow_layer, 'zero_final_conditioner_layer'):
 				flow_layer.zero_final_conditioner_layer()
@@ -98,7 +89,7 @@ class WorldModel(nn.Module):
 	def __repr__(self):
 		repr = 'TD-MPC2 World Model\n'
 		modules = ['Encoder', 'Flow', 'Dynamics', 'Reward', 'Termination', 'Policy prior', 'Q-functions']
-		for i, m in enumerate([self._encoder, self._target_flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
+		for i, m in enumerate([self._encoder, self._evidence_flow, self._dynamics, self._reward, self._termination, self._pi, self._Qs]):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
@@ -154,73 +145,94 @@ class WorldModel(nn.Module):
 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
 		return self._encoder[self.cfg.obs](obs)
 
-	def state2noise(self, z_next, z_prev, a, task):
+	def flow_loss(self, z, a, task):
 		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._target_flow.inverse(z_next, context=z_prev)
+			z = self.task_emb(z, task)
+		z = torch.cat([z, a], dim=-1)
+		return self._evidence_flow.forward_kld(z)
 
-	def noise2state(self, u_next, z_prev, a, task):
-		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._target_flow.forward(u_next, context=z_prev)
-
-	def flow_loss(self, z_next, z_prev, a, task):
-		if self.cfg.multitask:
-			z_prev = self.task_emb(z_prev, task)
-		z_prev = torch.cat([z_prev, a], dim=-1)
-		return self._target_flow.forward_kld(z_next, context=z_prev)
-
-	def id_logprob(self, z_next, z_prev, a, task):
+	def id_logprob(self, y, a, task):
 		with torch.no_grad():
 			if self.cfg.multitask:
-				z_prev = self.task_emb(z_prev, task)
-			z_prev = torch.cat([z_prev, a], dim=-1)
-			return self._target_flow.log_prob(z_next, context=z_prev)
+				y = self.task_emb(y, task)
+			y = torch.cat([y, a], dim=-1)
+			return self._evidence_flow.log_prob(y)
 
-	def id_bpd(self, z_next, z_prev, a, task):
-		id_logprob = self.id_logprob(z_next, z_prev, a, task)
-		return id_logprob / z_next.shape[-1] / torch.log(torch.tensor(2, dtype=torch.float32))
-
-	def next_noise(self, z, a, task) -> NormalInverseGamma:
+	def evidential_prediction(self, y, a, task) -> NormalInverseGamma:
 		"""
 		Predicts the next state in noise space conditional on the current latent state and action.
 		"""
 		if self.cfg.multitask:
-			z = self.task_emb(z, task)
-		z = torch.cat([z, a], dim=-1)
-		param_update = self._dynamics(z)
-		log_evidence_update = torch.log(self._certainty_budget) + self._evidence_flow.log_prob(z)[:,None]
-		log_evidence_combined = torch.cat([torch.log(self._evidence_prior).expand_as(log_evidence_update), log_evidence_update], dim=-1)
-		log_evidence_post = torch.logsumexp(log_evidence_combined, dim=-1, keepdim=True)
-		evidence_post = log_evidence_post.exp()
+			y = self.task_emb(y, task)
+		y = torch.cat([y, a], dim=-1)
 
-		param_post_weights = torch.softmax(log_evidence_combined, dim=-1)
-		w_prior = param_post_weights[:, 0:1]
-		w_update = param_post_weights[:, 1:2]
-		param_post = w_prior * self._param_prior + w_update * param_update
+		# Compute posterior evidence
+		log_n_update = self._log_NH + self._evidence_flow.log_prob(y).detach()[:,None]
+		log_n_combined = torch.cat([self._log_n_prior.expand_as(log_n_update), log_n_update], dim=-1)
+		log_n_post = torch.logsumexp(log_n_combined, dim=-1, keepdim=True)
+		#log_n_post = torch.logaddexp(self._log_n_prior.expand_as(log_n_update), log_n_update)
+		#w_prior = torch.exp(self._log_n_prior - log_n_post)
+		#w_update = torch.exp(log_n_update - log_n_post)
+		chi_post_weights = torch.softmax(log_n_combined, dim=-1)
+		w_prior = chi_post_weights[:, 0:1]
+		w_update = chi_post_weights[:, 1:2]
 
-		# Derive conjugate prior distribution from posterior parameters
-		param_post_1, param_post_2 = param_post.chunk(2, dim=-1)
-		mu = param_post_1
-		lam = evidence_post
-		alpha = evidence_post / 2
-		beta = 0.5 * evidence_post * (param_post_2 - param_post_1**2)
+		# Compute sufficient statistics update from dynamics model
+		chi_update = self._dynamics(y)
+		chi_update_1, chi_update_2_raw = chi_update.chunk(2, dim=-1)
+		var_update = F.softplus(chi_update_2_raw) + 1e-6	# Explicitly extract the update variance for stable math later
+		chi_update_2 = chi_update_1**2 + var_update
+		#chi_update = torch.cat([chi_update_1, chi_update_2], axis=-1)
 
-		#mu, nu_raw, alpha_raw, beta_raw = distribution_params.chunk(4, dim=-1)
-		#lam = F.softplus(nu_raw)
-		#alpha = 1 + F.softplus(alpha_raw)
-		#beta = F.softplus(beta_raw)
+		# Process prior sufficient statistics
+		#chi_prior_1 = chi_update_1.detach()
+		chi_prior_1 = self._chi_prior[:self._alr_dim].expand_as(chi_update_1)
+		chi_prior_2 = self._chi_prior[self._alr_dim:].expand_as(chi_update_2)
+		#chi_prior = torch.cat([chi_prior_1, chi_prior_2], dim=-1)
+		var_prior = chi_prior_2 - chi_prior_1**2 + 1e-6
+
+        # 5. Stable Interpolation in Linear Space
+        # Interpolate the means
+		chi_post_1 = (w_prior * chi_prior_1) + (w_update * chi_update_1)
+		# Interpolate the variance using the strictly positive algebraic expansion
+		var_post = (w_prior * var_prior) + \
+					(w_update * var_update) + \
+					(w_prior * w_update * (chi_prior_1 - chi_update_1)**2)
+		#chi_post_2 = chi_post_1**2 + var_post
+
+		""" log_chi_post = -torch.logaddexp(self._log_n_prior, log_n_update) + torch.logaddexp(
+      		self._log_n_prior.expand_as(chi_prior) + chi_prior.log(),
+			log_n_update.expand_as(chi_update) + chi_update.log(),
+        )
+		chi_post_1, chi_post_2 = log_chi_post.exp().chunk(2, dim=-1) """
+		""" chi_post_weights = torch.softmax(log_n_combined, dim=-1)
+		w_prior = chi_post_weights[:, 0:1]
+		w_update = chi_post_weights[:, 1:2]
+
+		# Standard interpolation for the raw chi moments
+		chi_post = w_prior * chi_prior + w_update * chi_update
+		chi_post_1, chi_post_2 = chi_post.chunk(2, dim=-1)
+
+		# Calculate posterior variance using the strictly positive algebraic expansion
+		var_prior = chi_prior_2 - chi_prior_1**2
+		var_post = (w_prior * var_prior) + (w_update * var_update) + (w_prior * w_update * (chi_prior_1 - chi_update_1)**2)
+ 		"""
+
+		n_post = log_n_post.exp()
+		lam = n_post
+		alpha = n_post / 2
+		beta = 0.5 * n_post * var_post
+		#beta = 0.5 * n_post * (chi_post_2 - chi_post_1**2)
+		mu = chi_post_1
 		return NormalInverseGamma(mu, lam, alpha, beta)
 
-	def next_latent(self, z, a, task):
+	def next_simplicial_latent(self, z, a, task):
 		"""
 		Predicts the next latent state given the current latent state and action.
 		"""
-		evidential_pred = self.next_noise(z, a, task)
-		u_next = evidential_pred.mu
-		return self.noise2state(u_next, z, a, task)
+		y = self._chunked_alr(z)
+		evid_pred = self.evidential_prediction(y, a, task)
+		return self._chunked_alr.inverse(evid_pred.mu) #self.noise2state(u_next, z, a, task)
 
 	def reward(self, z, a, task):
 		"""

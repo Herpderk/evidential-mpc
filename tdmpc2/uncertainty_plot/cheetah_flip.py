@@ -86,7 +86,7 @@ def evaluate_world_model_line(cfg: dict):
 
     with torch.no_grad():
         z = agent.model.encode(obs_batch, task=None)
-        next_z, nu, alpha, beta = agent.model.next_noise(z, action_batch, task=None)
+        next_z, nu, alpha, beta = agent.model.evidential_prediction(z, action_batch, task=None)
 
         # Reward and Value
         reward_preds = agent.model.reward(z, action_batch, task=None)

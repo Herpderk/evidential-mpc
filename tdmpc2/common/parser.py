@@ -62,8 +62,8 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 	if cfg.get('model_size', None) is not None:
 		assert cfg.model_size in MODEL_SIZE.keys(), \
 			f'Invalid model size {cfg.model_size}. Must be one of {list(MODEL_SIZE.keys())}'
-		for k, v in MODEL_SIZE[cfg.model_size].items():
-			cfg[k] = v
+		#for k, v in MODEL_SIZE[cfg.model_size].items():
+		#	cfg[k] = v
 		if cfg.task == 'mt30' and cfg.model_size == 19:
 			cfg.latent_dim = 512 # This checkpoint is slightly smaller
 

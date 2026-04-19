@@ -93,6 +93,35 @@ class SimNorm(nn.Module):
 		return f"SimNorm(dim={self.dim})"
 
 
+class ChunkedALR(nn.Module):
+	def __init__(self, cfg):
+		super().__init__()
+		self.dim_sim = cfg.simnorm_dim
+		self.dim_con = self.dim_sim - 1
+		self.eps = 1e-6
+
+	def forward(self, z):
+		shp = z.shape
+		z_proc = z.view(*shp[:-1], -1, self.dim_sim).clone()
+		z_clamp = torch.clamp(z_proc, min=self.eps)
+		shp = list(shp)
+		shp[-1] -= int(shp[-1] / self.dim_sim)
+		y = torch.log(z_clamp[..., :-1] / z_clamp[..., -1].unsqueeze(-1))
+		return y.view(*shp)
+
+	def inverse(self, y):
+		shp = y.shape
+		y_proc = y.view(*shp[:-1], -1, self.dim_con).clone()
+		z_pad = F.pad(y_proc, (0, 1), value=0.0)
+		shp = list(shp)
+		shp[-1] += int(shp[-1] / (self.dim_con))
+		z = F.softmax(z_pad, dim=-1)
+		return z.view(*shp)
+
+	def __repr__(self):
+		return f"ChunkedALR(dim={self.dim_sim})"
+
+
 class NormedLinear(nn.Linear):
 	"""
 	Linear layer with LayerNorm, activation, and optionally dropout.
@@ -207,18 +236,19 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	return nn.Sequential(*mlp)
 
 
-def conv(in_shape, num_channels, act=None):
+def conv(in_shape, num_channels, out_dim, act=None):
 	"""
 	Basic convolutional encoder for TD-MPC2 with raw image observations.
 	4 layers of convolution with ReLU activations, followed by a linear layer.
 	"""
 	assert in_shape[-1] == 64 # assumes rgb observations to be 64x64
+	out_channels = out_dim // 16
 	layers = [
 		ShiftAug(), PixelPreprocess(),
 		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.Mish(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.Mish(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.Mish(inplace=False),
-		nn.Conv2d(num_channels, num_channels, 3, stride=1), nn.Flatten()]
+		nn.Conv2d(num_channels, out_channels, 3, stride=1), nn.Flatten()]
 	if act:
 		layers.append(act)
 	return nn.Sequential(*layers)
@@ -232,7 +262,7 @@ def enc(cfg, out={}):
 		if k == 'state':
 			out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim, act=SimNorm(cfg))
 		elif k == 'rgb':
-			out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg))
+			out[k] = conv(cfg.obs_shape[k], cfg.num_channels, cfg.latent_dim, act=SimNorm(cfg))
 		else:
 			raise NotImplementedError(f"Encoder for observation type {k} not implemented.")
 	return nn.ModuleDict(out)

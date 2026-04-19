@@ -7,7 +7,7 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
-from common.evidential import aleatoric_uncertainty
+#from common.evidential import aleatoric_uncertainty
 from tensordict import TensorDict
 
 
@@ -25,8 +25,7 @@ class TDMPC2(torch.nn.Module):
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
-			{'params': self.model._target_flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
-			{'params': self.model._evidence_flow.parameters(), 'lr': self.cfg.lr*self.cfg.flow_lr_scale},
+			{'params': self.model._evidence_flow.parameters()},
 			{'params': self.model._dynamics.parameters()},
 			{'params': self.model._reward.parameters()},
 			{'params': self.model._termination.parameters() if self.cfg.episodic else []},
@@ -131,9 +130,12 @@ class TDMPC2(torch.nn.Module):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
+		y = self.model._chunked_alr(z)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			z = self.model.next_latent(z, actions[t], task)
+			y = self.model.evidential_prediction(y, actions[t], task).mu
+			z = self.model._chunked_alr.inverse(y)
+   			#z = self.model.next_simplicial_latent(z, actions[t], task)
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -161,9 +163,12 @@ class TDMPC2(torch.nn.Module):
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
+			_y = self.model._chunked_alr(z).repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				_z = self.model.next_latent(_z, pi_actions[t], task)
+				#_z = self.model.next_simplicial_latent(_z, pi_actions[t], task)
+				_y = self.model.evidential_prediction(_y, pi_actions[t], task).mu
+				_z = self.model._chunked_alr.inverse(_y)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -279,31 +284,24 @@ class TDMPC2(torch.nn.Module):
 		# Latent rollout
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
 		zs[0] = self.model.encode(obs[0], task)
+		ys = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.model._alr_dim, device=self.device)
+		ys[0] = self.model._chunked_alr(zs[0])
 		flow_loss = 0
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			#self.model.toggle_encoder_grad(False)
-			flow_loss += self.model.flow_loss(_next_z, zs[t], _action, task) * self.cfg.rho**t
-			#self.model.toggle_encoder_grad(True)
+			flow_loss += self.model.flow_loss(ys[t].detach(), _action,task) * self.cfg.rho**t
 
-			# Evaluate regression error
-			with torch.no_grad():
-				_next_u = self.model.state2noise(_next_z, zs[t], _action, task)
-			mu, lam, alpha, beta = self.model.next_noise(zs[t], _action, task)
-			squared_error = (mu - _next_u) ** 2
-
-			# Evidential NLL regression loss
-			#omega = 2 * beta * (1 + lam)
-			#nll_loss = 0.5 * torch.log(PI / lam) - alpha * torch.log(omega) \
-			#			+ (alpha + 0.5) * torch.log(squared_error * lam + omega) \
-			#			+ torch.lgamma(alpha) - torch.lgamma(alpha + 0.5)
+			with torch.no_grad():	# Evaluate regression error
+				_next_y = self.model._chunked_alr(_next_z)
+			mu, lam, alpha, beta = self.model.evidential_prediction(ys[t], _action, task)
+			squared_error = (mu - _next_y) ** 2
 
 			# NatPN losses
-			ll_under_conjprior = 0.5 * (
+			ll_under_cp = 0.5 * (
 				-squared_error*alpha/beta - lam.reciprocal()		# lam == lambda in the NIG distribution
     			+ torch.digamma(alpha) - torch.log(beta) - torch.log(torch.tensor(2*PI))
 			)
-			conjprior_entropy = torch.zeros_like(ll_under_conjprior)
+			cp_entropy = torch.zeros_like(ll_under_cp)
 			LOG_2PI = torch.log(torch.tensor(2 * PI))
 			entropy_large = (
 				1.0 + LOG_2PI - 2.0 * torch.log(alpha) + 1.5 * torch.log(beta) - 0.5 * torch.log(lam)
@@ -312,21 +310,14 @@ class TDMPC2(torch.nn.Module):
 				0.5 - 0.5 * torch.log(lam) + alpha - (alpha + 1.5) * torch.digamma(alpha)
 				+ 0.5 * LOG_2PI + 1.5 * torch.log(beta) + torch.lgamma(alpha)
 			)
-			conjprior_entropy = torch.where(alpha > 1e4, entropy_large, entropy_small)
-			natpn_loss = -ll_under_conjprior - self.cfg.evidential_reg_coef * conjprior_entropy
+			cp_entropy = torch.where(alpha > 1e4, entropy_large, entropy_small)
+			natpn_loss = -ll_under_cp - self.cfg.cp_entropy_coef * cp_entropy
 
-			# Evidential regularization
-			#aleatoric = aleatoric_uncertainty(lam, alpha, beta)
-			#reg_loss = torch.abs(_next_z - mu) * (2 * lam + alpha)
-			#reg_loss = torch.abs((_next_u - mu) / aleatoric) * (2 * lam + alpha)
-
-			# Aggregate batched losses
 			consistency_loss += natpn_loss.mean() * self.cfg.rho**t
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
-			self._toggle_grad(self.model._target_flow, False)
-			zs[t+1] = self.model.noise2state(mu, zs[t], _action, task)
-			self._toggle_grad(self.model._target_flow, True)
+			ys[t+1] = mu
+			zs[t+1] = self.model._chunked_alr.inverse(mu)
 
 		# Predictions
 		_zs = zs[:-1]
