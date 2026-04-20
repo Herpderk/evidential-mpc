@@ -136,7 +136,8 @@ class TDMPC2(torch.nn.Module):
 			evid_pred = self.model.evidential_prediction(y, actions[t], task)
 			y = evid_pred.mu
 			z = self.model.continuous2simplicial(y)
-			G = G + discount * (1-termination) * torch.linalg.norm(evidential_variance(evid_pred)) if self.cfg.use_var_cost else G
+			var_norm = torch.linalg.norm(evidential_variance(evid_pred), dim=-1, keepdim=True)
+			G = G + discount * (1-termination) * self.cfg.var_cost_coef * var_norm if self.cfg.use_var_cost else G
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
