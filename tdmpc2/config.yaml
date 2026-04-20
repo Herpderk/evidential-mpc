@@ -36,7 +36,7 @@ data_dir: ???
 # evidential dynamics and planning
 var_prior: 1000.0
 certainty_budget_coef: 1.0
-proc_noise_std: 1e-2
+proc_noise_std: 0.0
 var_cost_coef: 1.0
 use_var_cost: false
 
