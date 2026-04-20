@@ -130,7 +130,7 @@ class TDMPC2(torch.nn.Module):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
 		G, discount = 0, 1
 		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
-		y = self.model._chunked_alr(z)
+		y = self.model.simplicial2continuous(z)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
 			y = self.model.evidential_prediction(y, actions[t], task).mu
@@ -163,7 +163,7 @@ class TDMPC2(torch.nn.Module):
 		if self.cfg.num_pi_trajs > 0:
 			pi_actions = torch.empty(self.cfg.horizon, self.cfg.num_pi_trajs, self.cfg.action_dim, device=self.device)
 			_z = z.repeat(self.cfg.num_pi_trajs, 1)
-			_y = self.model._chunked_alr(z).repeat(self.cfg.num_pi_trajs, 1)
+			_y = self.model.simplicial2continuous(z).repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
 				#_z = self.model.next_simplicial_latent(_z, pi_actions[t], task)
@@ -285,14 +285,14 @@ class TDMPC2(torch.nn.Module):
 		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
 		zs[0] = self.model.encode(obs[0], task)
 		ys = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.model._alr_dim, device=self.device)
-		ys[0] = self.model._chunked_alr(zs[0])
+		ys[0] = self.model.simplicial2continuous(zs[0])
 		flow_loss = 0
 		consistency_loss = 0
 		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
 			flow_loss += self.model.flow_loss(ys[t].detach(), _action,task) * self.cfg.rho**t
 
 			with torch.no_grad():	# Evaluate regression error
-				_next_y = self.model._chunked_alr(_next_z)
+				_next_y = self.model.simplicial2continuous(_next_z)
 			mu, lam, alpha, beta = self.model.evidential_prediction(ys[t], _action, task)
 			squared_error = (mu - _next_y) ** 2
 

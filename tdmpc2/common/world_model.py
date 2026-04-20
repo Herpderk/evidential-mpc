@@ -47,7 +47,7 @@ class WorldModel(nn.Module):
 			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
-		self.register_buffer("_log_NH", torch.tensor(self._alr_dim+cfg.action_dim))
+		self.register_buffer("_log_NH", cfg.certainty_budget_coef * torch.tensor(self._alr_dim+cfg.action_dim))
 		self.register_buffer("_log_n_prior", torch.tensor(0.0))  # Prior evidence for conjugate update in dynamics
 		self.register_buffer("_chi_prior", torch.cat([
 	  		torch.zeros(self._alr_dim),
@@ -180,7 +180,7 @@ class WorldModel(nn.Module):
 		# Compute sufficient statistics update from dynamics model
 		chi_update = self._dynamics(y)
 		chi_update_1, chi_update_2_raw = chi_update.chunk(2, dim=-1)
-		var_update = F.softplus(chi_update_2_raw) + 1e-6	# Explicitly extract the update variance for stable math later
+		var_update = F.softplus(chi_update_2_raw) + 1e-4	# Explicitly extract the update variance for stable math later
 		chi_update_2 = chi_update_1**2 + var_update
 		#chi_update = torch.cat([chi_update_1, chi_update_2], axis=-1)
 
@@ -189,7 +189,7 @@ class WorldModel(nn.Module):
 		chi_prior_1 = self._chi_prior[:self._alr_dim].expand_as(chi_update_1)
 		chi_prior_2 = self._chi_prior[self._alr_dim:].expand_as(chi_update_2)
 		#chi_prior = torch.cat([chi_prior_1, chi_prior_2], dim=-1)
-		var_prior = chi_prior_2 - chi_prior_1**2 + 1e-6
+		var_prior = chi_prior_2 - chi_prior_1**2
 
         # 5. Stable Interpolation in Linear Space
         # Interpolate the means
@@ -200,37 +200,21 @@ class WorldModel(nn.Module):
 					(w_prior * w_update * (chi_prior_1 - chi_update_1)**2)
 		#chi_post_2 = chi_post_1**2 + var_post
 
-		""" log_chi_post = -torch.logaddexp(self._log_n_prior, log_n_update) + torch.logaddexp(
-      		self._log_n_prior.expand_as(chi_prior) + chi_prior.log(),
-			log_n_update.expand_as(chi_update) + chi_update.log(),
-        )
-		chi_post_1, chi_post_2 = log_chi_post.exp().chunk(2, dim=-1) """
-		""" chi_post_weights = torch.softmax(log_n_combined, dim=-1)
-		w_prior = chi_post_weights[:, 0:1]
-		w_update = chi_post_weights[:, 1:2]
-
-		# Standard interpolation for the raw chi moments
-		chi_post = w_prior * chi_prior + w_update * chi_update
-		chi_post_1, chi_post_2 = chi_post.chunk(2, dim=-1)
-
-		# Calculate posterior variance using the strictly positive algebraic expansion
-		var_prior = chi_prior_2 - chi_prior_1**2
-		var_post = (w_prior * var_prior) + (w_update * var_update) + (w_prior * w_update * (chi_prior_1 - chi_update_1)**2)
- 		"""
-
 		n_post = log_n_post.exp()
-		lam = n_post
-		alpha = n_post / 2
+		alpha = 0.5 * n_post
 		beta = 0.5 * n_post * var_post
 		#beta = 0.5 * n_post * (chi_post_2 - chi_post_1**2)
 		mu = chi_post_1
-		return NormalInverseGamma(mu, lam, alpha, beta)
+		return NormalInverseGamma(mu, n_post, alpha, beta)
+
+	def simplicial2continuous(self, z):
+		return self._chunked_alr(z)
 
 	def next_simplicial_latent(self, z, a, task):
 		"""
 		Predicts the next latent state given the current latent state and action.
 		"""
-		y = self._chunked_alr(z)
+		y = self.simplicial2continuous(z)
 		evid_pred = self.evidential_prediction(y, a, task)
 		return self._chunked_alr.inverse(evid_pred.mu) #self.noise2state(u_next, z, a, task)
 

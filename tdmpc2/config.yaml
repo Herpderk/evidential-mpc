@@ -20,7 +20,6 @@ termination_coef: 1
 consistency_coef: 20
 flow_coef: 1.0
 cp_entropy_coef: 1e-4
-var_prior: 100.0
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
@@ -33,6 +32,11 @@ discount_max: 0.995
 buffer_size: 1_000_000
 exp_name: default
 data_dir: ???
+
+# evidential dynamics
+var_prior: 1000.0
+certainty_budget_coef: 1.0
+proc_noise_std: 5e-2
 
 # planning
 mpc: true

@@ -98,7 +98,7 @@ class ChunkedALR(nn.Module):
 		super().__init__()
 		self.dim_sim = cfg.simnorm_dim
 		self.dim_con = self.dim_sim - 1
-		self.eps = 1e-6
+		self.eps = 1e-4
 
 	def forward(self, z):
 		shp = z.shape

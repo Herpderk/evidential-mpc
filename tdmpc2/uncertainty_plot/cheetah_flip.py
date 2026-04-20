@@ -5,24 +5,26 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
 
-from common.evidential import aleatoric_uncertainty, epistemic_uncertainty
+import sys
+from pathlib import Path
+tdmpc2_path = Path(__file__).parent.parent
+sys.path.append(str(tdmpc2_path))
+
+from common.evidential import evidential_variance
 from common.parser import parse_cfg
 from envs import make_env
 from tdmpc2 import TDMPC2
 
-# Observation indices
-HEIGHT_IDX = 1
-ANGLE_IDX = 2
-
-# Line parameters (Only varying angle now)
+# Line parameters (Only varying pitch angle)
 CONSTANT_HEIGHT = 0.5  # Adjust this to your cheetah's typical resting height
 ANGLE_RANGE = (-np.pi, np.pi)
 RESOLUTION = 50
 
 @hydra.main(config_name='config', config_path='..')
 def evaluate_world_model_line(cfg: dict):
-    """Loads the TD-MPC2 agent and evaluates uncertainty across pitch angles."""
-    cfg['task'] = 'cup-catch'
+    """Loads the TD-MPC2 agent and evaluates density and variance across pitch angles."""
+    # Ensure the task is set for cheetah
+    cfg['task'] = 'cheetah-flip'
     cfg = parse_cfg(cfg)
 
     env = make_env(cfg)
@@ -34,7 +36,7 @@ def evaluate_world_model_line(cfg: dict):
 
     print(f"Generating pixel-based state line at constant height {CONSTANT_HEIGHT}...")
 
-    # 1D array of angles
+    # 1D array of pitch angles
     angles = torch.linspace(ANGLE_RANGE[0], ANGLE_RANGE[1], RESOLUTION)
     num_states = len(angles)
 
@@ -64,6 +66,7 @@ def evaluate_world_model_line(cfg: dict):
         # Safely teleport the cheetah
         with physics.reset_context():
             physics.named.data.qpos['rootz'] = CONSTANT_HEIGHT
+            # rooty represents the pitch angle in dm_control's planar cheetah
             physics.named.data.qpos['rooty'] = angles[i].item()
             physics.data.qvel[:] = 0
 
@@ -86,9 +89,14 @@ def evaluate_world_model_line(cfg: dict):
 
     with torch.no_grad():
         z = agent.model.encode(obs_batch, task=None)
-        next_z, nu, alpha, beta = agent.model.evidential_prediction(z, action_batch, task=None)
+        y = agent.model.simplicial2continuous(z)
 
-        # Reward and Value
+        # Calculate density (log-prob) and variance
+        evid_pred = agent.model.evidential_prediction(y, action_batch, task=None)
+        density = agent.model.id_logprob(y, action_batch, task=None)
+        var = evidential_variance(evid_pred)
+
+        # Reward and Value predictions
         reward_preds = agent.model.reward(z, action_batch, task=None)
         q_values = agent.model.Q(z, action_batch, task=None)
 
@@ -100,54 +108,40 @@ def evaluate_world_model_line(cfg: dict):
         reward_scalars = reward_preds.argmax(dim=-1).float().cpu().numpy()
         value_scalars = value_preds.argmax(dim=-1).float().cpu().numpy()
 
-        # Calculate Mean of uncertainties across latent dims
-        aleatoric_vec = aleatoric_uncertainty(nu, alpha, beta)
-        epistemic_vec = epistemic_uncertainty(nu)
-
-        aleatoric_mean = torch.mean(aleatoric_vec, dim=-1).cpu().numpy()
-
-        # Extract raw evidence for the "Zoomed" relative grid
-        raw_evidence = nu.detach().cpu().numpy()
-        evidence_scalar = np.mean(raw_evidence, axis=-1)
-
-        # Baseline subtraction for saturated epistemic signal
-        zoomed_line = (evidence_scalar - np.min(evidence_scalar))
-        if np.max(zoomed_line) < 1e-3:
-            zoomed_line = zoomed_line * 1e5
-
-        epistemic_line = zoomed_line
-        epistemic_line = torch.mean(epistemic_vec, dim=-1).cpu().numpy()
-
     print("Evaluation complete.")
 
     # --- Plotting ---
-    angles_np = angles.numpy()
+    angles_np = angles.cpu().numpy()
     formatter = ScalarFormatter(useOffset=False)
-    formatter.set_scientific(False)
+    #formatter.set_scientific(False)
 
-    # 1x2 grid of 2D plots
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(12, 10))
-
-    # Plot Aleatoric Line
-    ax0.plot(angles_np, aleatoric_mean, color='tab:blue', linewidth=3, marker='', markersize=4)
-    ax0.set_title(f'Aleatoric Uncertainty vs. Pitch (Height={CONSTANT_HEIGHT})')
+    # Plot Density Line (Square-ish Plot)
+    fig_density = plt.figure(figsize=(8, 6))
+    ax0 = fig_density.add_subplot(111)
+    ax0.plot(angles_np, density.cpu().numpy(), color='tab:blue', linewidth=3, marker='o', markersize=4)
+    ax0.set_title(f'Density vs. Pitch Angle\n(Height={CONSTANT_HEIGHT})')
     ax0.set_xlabel('Pitch Angle (rad)')
-    ax0.set_ylabel('Uncertainty Magnitude')
-    ax0.yaxis.set_major_formatter(formatter)
+    ax0.set_ylabel('Density Log-Prob')
+    #ax0.yaxis.set_major_formatter(formatter)
     ax0.grid(True, linestyle='--', alpha=0.7)
+    fig_density.tight_layout()
 
-    # Plot Epistemic Line
-    ax1.plot(angles_np, epistemic_line, color='tab:orange', linewidth=3, marker='', markersize=4)
-    ax1.set_title('Epistemic Uncertainty vs. Pitch')
+    # Plot Variance Line (Square-ish Plot)
+    fig_var = plt.figure(figsize=(8, 6))
+    ax1 = fig_var.add_subplot(111)
+    ax1.plot(angles_np, var.cpu().numpy(), color='tab:orange', linewidth=3, marker='o', markersize=4)
+    ax1.set_title(f'Variance vs. Pitch Angle\n(Height={CONSTANT_HEIGHT})')
     ax1.set_xlabel('Pitch Angle (rad)')
-    ax1.set_ylabel('Uncertainty Magnitude')
-    ax1.yaxis.set_major_formatter(formatter)
+    ax1.set_ylabel('Variance Magnitudes')
+    ax1.set_yscale('log')
+    #ax1.yaxis.set_major_formatter(formatter)
     ax1.grid(True, linestyle='--', alpha=0.7)
+    fig_var.tight_layout()
 
-    plt.tight_layout()
+    # Display both plots
     plt.show()
 
-    return angles_np, reward_scalars, value_scalars, next_z
+    return angles_np, reward_scalars, value_scalars, y
 
 if __name__ == "__main__":
     evaluate_world_model_line()

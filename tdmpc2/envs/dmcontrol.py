@@ -25,7 +25,7 @@ def get_obs_shape(env):
 
 
 class DMControlWrapper:
-	def __init__(self, env, domain):
+	def __init__(self, env, domain, noise_std=0.0):
 		self.env = env
 		self.camera_id = 2 if domain == 'quadruped' else 0
 		obs_shape = get_obs_shape(env)
@@ -39,15 +39,16 @@ class DMControlWrapper:
 			high=np.full(action_shape, env.action_spec().maximum),
 			dtype=env.action_spec().dtype)
 		self.action_spec_dtype = env.action_spec().dtype
+		self.noise_std = np.abs(noise_std)
 
 	@property
 	def unwrapped(self):
 		return self.env
-	
+
 	def _obs_to_array(self, obs):
 		return torch.from_numpy(
 			np.concatenate([v.flatten() for v in obs.values()], dtype=np.float32))
-	
+
 	def reset(self):
 		return self._obs_to_array(self.env.reset().observation)
 
@@ -55,10 +56,16 @@ class DMControlWrapper:
 		reward = 0
 		action = action.astype(self.action_spec_dtype)
 		for _ in range(2):
+			if self.noise_std > 0.0:	# Sample and inject process noise
+				self.env.physics.data.qvel[:] += np.random.normal(
+                    loc=0.0,
+                    scale=self.noise_std,
+                    size=self.env.physics.data.qvel.shape,
+                ).astype(self.action_spec_dtype)
 			step = self.env.step(action)
 			reward += step.reward
 		return self._obs_to_array(step.observation), reward, False, defaultdict(float)
-	
+
 	def render(self, width=384, height=384, camera_id=None):
 		return self.env.physics.render(height, width, camera_id or self.camera_id)
 
@@ -104,7 +111,7 @@ def make_env(cfg):
 					 task_kwargs={'random': cfg.seed},
 					 visualize_reward=False)
 	env = action_scale.Wrapper(env, minimum=-1., maximum=1.)
-	env = DMControlWrapper(env, domain)
+	env = DMControlWrapper(env, domain, noise_std=cfg.proc_noise_std)
 	if cfg.obs == 'rgb':
 		env = Pixels(env, cfg)
 	env = Timeout(env, max_episode_steps=500)

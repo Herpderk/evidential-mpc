@@ -12,5 +12,5 @@ def epistemic_uncertainty(nu, alpha, beta) -> torch.Tensor:
 def epistemic_uncertainty(nu) -> torch.Tensor:
     return 1 / torch.sqrt(nu)"""
 
-def uncertainty(evid_pred):
-    return evid_pred.mu + 2*evid_pred.beta / evid_pred.lam
+def evidential_variance(evid_pred):
+    return 2*evid_pred.beta / evid_pred.lam
