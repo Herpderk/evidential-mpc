@@ -7,7 +7,7 @@ from common import math
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
-#from common.evidential import aleatoric_uncertainty
+from common.evidential import evidential_variance
 from tensordict import TensorDict
 
 
@@ -133,9 +133,10 @@ class TDMPC2(torch.nn.Module):
 		y = self.model.simplicial2continuous(z)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
-			y = self.model.evidential_prediction(y, actions[t], task).mu
-			z = self.model._chunked_alr.inverse(y)
-   			#z = self.model.next_simplicial_latent(z, actions[t], task)
+			evid_pred = self.model.evidential_prediction(y, actions[t], task)
+			y = evid_pred.mu
+			z = self.model.continuous2simplicial(y)
+			G = G + discount * (1-termination) * torch.linalg.norm(evidential_variance(evid_pred)) if self.cfg.use_var_cost else G
 			G = G + discount * (1-termination) * reward
 			discount_update = self.discount[torch.tensor(task)] if self.cfg.multitask else self.discount
 			discount = discount * discount_update
@@ -166,9 +167,9 @@ class TDMPC2(torch.nn.Module):
 			_y = self.model.simplicial2continuous(z).repeat(self.cfg.num_pi_trajs, 1)
 			for t in range(self.cfg.horizon-1):
 				pi_actions[t], _ = self.model.pi(_z, task)
-				#_z = self.model.next_simplicial_latent(_z, pi_actions[t], task)
-				_y = self.model.evidential_prediction(_y, pi_actions[t], task).mu
-				_z = self.model._chunked_alr.inverse(_y)
+				evid_pred = self.model.evidential_prediction(_y, pi_actions[t], task)
+				_y = evid_pred.mu
+				_z = self.model.continuous2simplicial(_y)
 			pi_actions[-1], _ = self.model.pi(_z, task)
 
 		# Initialize state and parameters
@@ -317,7 +318,7 @@ class TDMPC2(torch.nn.Module):
 
 			# Transform prediction from noise to latent space (Shield the flow from regression loss)
 			ys[t+1] = mu
-			zs[t+1] = self.model._chunked_alr.inverse(mu)
+			zs[t+1] = self.model.continuous2simplicial(mu)
 
 		# Predictions
 		_zs = zs[:-1]

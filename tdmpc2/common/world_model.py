@@ -210,6 +210,9 @@ class WorldModel(nn.Module):
 	def simplicial2continuous(self, z):
 		return self._chunked_alr(z)
 
+	def continuous2simplicial(self, y):
+		return self._chunked_alr.inverse(y)
+
 	def next_simplicial_latent(self, z, a, task):
 		"""
 		Predicts the next latent state given the current latent state and action.

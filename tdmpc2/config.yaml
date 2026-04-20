@@ -17,7 +17,7 @@ batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
-consistency_coef: 20
+consistency_coef: 10
 flow_coef: 1.0
 cp_entropy_coef: 1e-4
 rho: 0.5
@@ -33,10 +33,12 @@ buffer_size: 1_000_000
 exp_name: default
 data_dir: ???
 
-# evidential dynamics
+# evidential dynamics and planning
 var_prior: 1000.0
 certainty_budget_coef: 1.0
-proc_noise_std: 5e-2
+proc_noise_std: 1e-2
+var_cost_coef: 1.0
+use_var_cost: false
 
 # planning
 mpc: true
