@@ -32,6 +32,7 @@ def evaluate_world_model_landscape(cfg: dict):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     assert os.path.exists(cfg.checkpoint), f'Checkpoint {cfg.checkpoint} not found! Must be a valid filepath.'
     agent.load(cfg.checkpoint)
+    agent.model.eval()
 
     print(f"Generating 2D pixel-based state grid (Resolution {RESOLUTION}x{RESOLUTION})...")
 
