@@ -116,30 +116,29 @@ def evaluate_world_model_line(cfg: dict):
     formatter = ScalarFormatter(useOffset=False)
     #formatter.set_scientific(False)
 
-    # Plot Density Line (Square-ish Plot)
-    fig_density = plt.figure(figsize=(8, 6))
-    ax0 = fig_density.add_subplot(111)
+    # Create a single figure with 1 row and 2 columns for side-by-side plots
+    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Plot Density Line (Left Subplot)
     ax0.plot(angles_np, density.cpu().numpy(), color='tab:blue', linewidth=3, marker='o', markersize=4)
     ax0.set_title(f'Density vs. Pitch Angle\n(Height={CONSTANT_HEIGHT})')
     ax0.set_xlabel('Pitch Angle (rad)')
     ax0.set_ylabel('Density Log-Prob')
     #ax0.yaxis.set_major_formatter(formatter)
     ax0.grid(True, linestyle='--', alpha=0.7)
-    fig_density.tight_layout()
 
-    # Plot Variance Line (Square-ish Plot)
-    fig_var = plt.figure(figsize=(8, 6))
-    ax1 = fig_var.add_subplot(111)
+    # Plot Variance Line (Right Subplot)
     ax1.plot(angles_np, var.cpu().numpy(), color='tab:orange', linewidth=3, marker='o', markersize=4)
     ax1.set_title(f'Variance vs. Pitch Angle\n(Height={CONSTANT_HEIGHT})')
     ax1.set_xlabel('Pitch Angle (rad)')
     ax1.set_ylabel('Variance Magnitudes')
     ax1.set_yscale('log')
+    #ax1.set_ylim(bottom=0.002)
     #ax1.yaxis.set_major_formatter(formatter)
     ax1.grid(True, linestyle='--', alpha=0.7)
-    fig_var.tight_layout()
 
-    # Display both plots
+    # Display the unified figure
+    fig.tight_layout()
     plt.show()
 
     return angles_np, reward_scalars, value_scalars, y

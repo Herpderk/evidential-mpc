@@ -41,12 +41,14 @@ class WorldModel(nn.Module):
             out_dim=2*self._alr_dim,    # Output posterior update params
             #act=layers.SimNorm(cfg),
         )
+
 		self._evidence_flow = layers.acf(
 			feature_dim=self._alr_dim + cfg.action_dim,
 			context_dim=0,
 			conditioner_dims=max(cfg.num_flow_cond_layers, 1) * [cfg.flow_cond_dim],
 			num_layers=cfg.num_flow_layers,
 		)
+
 		self.register_buffer("_log_NH", cfg.certainty_budget_coef * torch.tensor(self._alr_dim+cfg.action_dim))
 		self.register_buffer("_log_n_prior", torch.tensor(0.0))  # Prior evidence for conjugate update in dynamics
 		self.register_buffer("_chi_prior", torch.cat([
@@ -180,7 +182,7 @@ class WorldModel(nn.Module):
 		# Compute sufficient statistics update from dynamics model
 		chi_update = self._dynamics(y)
 		chi_update_1, chi_update_2_raw = chi_update.chunk(2, dim=-1)
-		var_update = F.softplus(chi_update_2_raw) + 1e-4	# Explicitly extract the update variance for stable math later
+		var_update = F.softplus(chi_update_2_raw) + 1e-6	# Explicitly extract the update variance for stable math later
 		chi_update_2 = chi_update_1**2 + var_update
 		#chi_update = torch.cat([chi_update_1, chi_update_2], axis=-1)
 
@@ -188,6 +190,7 @@ class WorldModel(nn.Module):
 		#chi_prior_1 = chi_update_1.detach()
 		chi_prior_1 = self._chi_prior[:self._alr_dim].expand_as(chi_update_1)
 		chi_prior_2 = self._chi_prior[self._alr_dim:].expand_as(chi_update_2)
+		#var_prior = chi_prior_2 - chi_prior_
 		#chi_prior = torch.cat([chi_prior_1, chi_prior_2], dim=-1)
 		var_prior = chi_prior_2 - chi_prior_1**2
 
@@ -205,6 +208,7 @@ class WorldModel(nn.Module):
 		beta = 0.5 * n_post * var_post
 		#beta = 0.5 * n_post * (chi_post_2 - chi_post_1**2)
 		mu = chi_post_1
+		#print(f"w_prior: {w_prior.mean().item():.4f} | w_update: {w_update.mean().item():.4f} | alpha: {alpha.mean().item():.4f}")
 		return NormalInverseGamma(mu, n_post, alpha, beta)
 
 	def simplicial2continuous(self, z):

@@ -121,7 +121,7 @@ def evaluate_world_model_landscape(cfg: dict):
 
     # Reshape the flat 1D output vectors back into 2D arrays matching the grid resolution
     density_2d = density.cpu().numpy().reshape(RESOLUTION, RESOLUTION)
-    var_2d = torch.mean(var, dim=-1).cpu().numpy().reshape(RESOLUTION, RESOLUTION)
+    var_2d = torch.sum(var, dim=-1).cpu().numpy().reshape(RESOLUTION, RESOLUTION)
     reward_2d = reward_scalars.reshape(RESOLUTION, RESOLUTION)
     value_2d = value_scalars.reshape(RESOLUTION, RESOLUTION)
 

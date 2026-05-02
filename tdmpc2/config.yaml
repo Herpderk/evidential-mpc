@@ -17,13 +17,12 @@ batch_size: 256
 reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
-consistency_coef: 10
+consistency_coef: 1.0
 flow_coef: 1.0
 cp_entropy_coef: 1e-4
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
-flow_lr_scale: 1e+0
 grad_clip_norm: 20
 tau: 0.01
 discount_denom: 5
@@ -34,8 +33,8 @@ exp_name: default
 data_dir: ???
 
 # evidential dynamics and planning
-var_prior: 1000.0
-certainty_budget_coef: 1.0
+var_prior: 100.0
+certainty_budget_coef: 0.1
 proc_noise_std: 0.0
 var_cost_coef: 1.0
 use_var_cost: false
@@ -70,7 +69,7 @@ flow_cond_dim: 512
 num_flow_cond_layers: 1
 num_channels: 32
 mlp_dim: 512
-latent_dim: 64
+latent_dim: 512
 task_dim: 96
 num_q: 5
 dropout: 0.01

@@ -120,13 +120,12 @@ def evaluate_world_model_landscape(cfg: dict):
         value_scalars = value_preds.argmax(dim=-1).float().cpu().numpy()
 
         # Calculate mean density and variance across latent dimensions to get scalars per state
-        density_mean = torch.mean(density, dim=-1).cpu().numpy()
         var_mean = torch.mean(var, dim=-1).cpu().numpy()
 
     print("Evaluation complete. Plotting 3D landscapes...")
 
     # Reshape the flat 1D output vectors back into 2D arrays matching the grid resolution
-    density_2d = density_mean.reshape(RESOLUTION, RESOLUTION)
+    density_2d = density.cpu().numpy().reshape(RESOLUTION, RESOLUTION)
     var_2d = var_mean.reshape(RESOLUTION, RESOLUTION)
     reward_2d = reward_scalars.reshape(RESOLUTION, RESOLUTION)
     value_2d = value_scalars.reshape(RESOLUTION, RESOLUTION)
